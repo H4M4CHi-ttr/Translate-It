@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & Support
+    url: https://github.com/Translate-It-App/Translate-It/discussions/categories/q-a
+    about: Ask questions or get help using Translate It in GitHub Discussions.
