@@ -35,26 +35,80 @@
 <br>
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=oMw-CbcKPOY">
+  <a href="https://youtu.be/VxgRWlx20wU">
     <b>YouTubeでデモを見る</b>
   </a>
   <br>
-  <a href="https://www.youtube.com/watch?v=oMw-CbcKPOY">
+  <a href="https://youtu.be/VxgRWlx20wU">
     <img src="./Images/Windows.png" alt="動画を見る" width="560" />
   </a>
 </p>
 
 ---
 
-## なぜ Translate It なのか？
+## 目標
 
-- **プライバシー第一:** OCR やコアプロセスはローカルで実行されます。データがブラウザの外に出ることはありません。
-- **PDF翻訳:** ローカルまたはオンラインのPDFファイルを開き、インテリジェントなページ翻訳、対訳表示での閲覧、スキャンPDF向けOCR、TXT/Markdown/HTMLへのエクスポートに対応。
-- **AI 搭載:** Gemini、OpenAI、DeepSeek などに対応。
-- **コスト効率:** 独自の「エコノミーモード」により、**AI トークンを最大 70% 節約**。
-- **ゼロプレッシャー・エンジニアリング:** 低フットプリント動作に最適化。RAM の膨張やシステムの速度低下を心配することなく、数十のタブを開いたままにできます。
-- **プラットフォームを選ばない:** デスクトップ版 Chrome から Android 版 Firefox まで、シームレスな体験を提供。
+- **プライバシーと選択肢:** 翻訳をどのように処理するかは自分で選べます。対応している機能ではローカルやオフラインのプロバイダーを使うことも、好みのクラウドサービスを設定することもできます。
+- **プロバイダーを自由に選べる:** ひとつのサービスに縛られることなく、ローカル、無料、従来型、AI ベースのプロバイダーを用途に合わせて切り替えられます。
+- **さまざまな場面で使える:** 選択したテキストや入力欄だけでなく、ページ内の要素、ページ全体、PDF、字幕、OCR、マウスホバー、ライブ音声まで、ひとつの拡張機能で対応します。
+- **普段のブラウジングに合わせた設計:** 動的なページや長いコンテンツ、継続的な翻訳にも対応し、デスクトップでもモバイルでも快適に使えるよう設計されています。
 
+
+---
+
+## 機能一覧
+
+| 機能 | 説明 |
+| :--- | :--- |
+| **テキスト選択** | テキストを選択した場所に翻訳アイコンやボックスを即座に表示。 |
+| **要素モード** | UI 要素をクリックして、レイアウトを維持したままインラインで翻訳。 |
+| **ページ全体翻訳** | 遅延読み込みとスマートなメモリ管理により、ページ全体を自動翻訳。 |
+| **PDF翻訳** | ローカル/オンラインのPDFファイルを対訳表示、スキャンPDF向けOCR、TXT/Markdown/HTMLへのエクスポートに対応して翻訳。 |
+| **マウスホバー翻訳** | テキストにマウスを合わせるだけで翻訳ツールチップを表示（単語/一文/コンテナの範囲指定に対応）。 |
+| **デスクトップ/モバイル FAB** | OCR、要素モード、即時設定にアクセスできる多目的フローティングハブ。 |
+| **入力欄翻訳 (Ctrl+/)** | 送信前にテキスト入力欄の内容をその場で翻訳。 |
+| **スマート辞書** | 定義、類義語、使用例をマルチアクセントの音声合成とともに表示。 |
+| **履歴とエクスポート** | 翻訳履歴を管理し、後で利用するためにエクスポート可能。 |
+| **リソーストッカー** | ブラウザを高速に保つための高度なメモリ管理システム。 |
+
+---
+
+## 対応プロバイダー
+
+Translate It は、一般的な翻訳サービス、AI、ローカル、辞書など、さまざまなプロバイダーに対応しています。
+
+- **一般的な翻訳サービス:** [Google](https://translate.google.com/)、[Microsoft](https://www.microsoft.com/translator/)、[DeepL](https://www.deepl.com/translator)、[Yandex](https://translate.yandex.com/)、[Lingva](https://github.com/TheDavidDelta/lingva-translate)、[Bing](https://www.bing.com/translator)
+- **AI:** [Gemini](https://ai.google.dev/)、[OpenAI](https://openai.com/api/)、[OpenRouter](https://openrouter.ai/)、[Requesty](https://www.requesty.ai/)、[DeepSeek](https://platform.deepseek.com/)
+- **カスタム・ローカル:** OpenAI Compatible、[WebAI-to-API](https://github.com/Amm1rr/WebAI-to-API/)、Browser Translation
+- **辞書:** [Vajehyab](https://vajehyab.com/)
+
+API キーが必要なプロバイダーと、設定なしで使えるプロバイダーがあります。
+
+---
+
+## はじめに
+
+### 1. インストール
+最適な体験のために、公式ストアからインストールしてください：
+
+<p align="center">
+  <a target="_blank" href="https://chromewebstore.google.com/detail/AI%20Writing%20Companion%20for%20Chrome/jfkpmcnebiamnbbkpmmldomjijiahmbd/">
+    <img src="../docs/Store/Chrome-Store.png" alt="Chrome" height="50" />
+  </a>
+  <a target="_blank" href="https://addons.mozilla.org/en-GB/firefox/addon/ai-writing-companion/">
+    <img src="../docs/Store/Firefox-Store.png" alt="Firefox" height="50" />
+  </a>
+</p>
+
+*手動でのインストールについては、[インストールガイド](./guides/INSTALLATION.md)をご覧ください。*
+
+### 2. 設定
+ほとんどの AI プロバイダーには API キーが必要です。
+- [**API 設定ガイド**](./guides/API_GUIDE.md)に従って、Gemini や OpenAI などを設定してください。
+- *Google や Yandex などの無料プロバイダーは、設定なしですぐに使用できます。*
+
+### 3. ショートカットの活用
+[**ユーザーガイド**](./guides/USAGE.md)でショートカットを確認し、生産性を最大限に高めましょう。
 
 ---
 
@@ -124,50 +178,6 @@ API コストと UI スピードを **最適化レベル（1〜5）** で完全�
 ### 9. マウスホバー翻訳 (インスタント・グランス)
 - **一瞬で翻訳:** 修飾キー（Ctrlなど）を押しながらテキストにマウスを合わせるだけで、目立たないツールチップに翻訳結果を即座に表示します。
 - **スマートな範囲指定:** 翻訳対象を自由に選択：**単語**、**一文**、または**コンテナ全体**を自動的に認識して翻訳します。
-
----
----
-
-## 機能一覧
-
-| 機能 | 説明 |
-| :--- | :--- |
-| **テキスト選択** | テキストを選択した場所に翻訳アイコンやボックスを即座に表示。 |
-| **要素モード** | UI 要素をクリックして、レイアウトを維持したままインラインで翻訳。 |
-| **ページ全体翻訳** | 遅延読み込みとスマートなメモリ管理により、ページ全体を自動翻訳。 |
-| **PDF翻訳** | ローカル/オンラインのPDFファイルを対訳表示、スキャンPDF向けOCR、TXT/Markdown/HTMLへのエクスポートに対応して翻訳。 |
-| **マウスホバー翻訳** | テキストにマウスを合わせるだけで翻訳ツールチップを表示（単語/一文/コンテナの範囲指定に対応）。 |
-| **デスクトップ/モバイル FAB** | OCR、要素モード、即時設定にアクセスできる多目的フローティングハブ。 |
-| **入力欄翻訳 (Ctrl+/)** | 送信前にテキスト入力欄の内容をその場で翻訳。 |
-| **スマート辞書** | 定義、類義語、使用例をマルチアクセントの音声合成とともに表示。 |
-| **履歴とエクスポート** | 翻訳履歴を管理し、後で利用するためにエクスポート可能。 |
-| **リソーストッカー** | ブラウザを高速に保つための高度なメモリ管理システム。 |
-
----
-
-## はじめに
-
-### 1. インストール
-最適な体験のために、公式ストアからインストールしてください：
-
-<p align="center">
-  <a target="_blank" href="https://chromewebstore.google.com/detail/AI%20Writing%20Companion%20for%20Chrome/jfkpmcnebiamnbbkpmmldomjijiahmbd/">
-    <img src="../docs/Store/Chrome-Store.png" alt="Chrome" height="50" />
-  </a>
-  <a target="_blank" href="https://addons.mozilla.org/en-GB/firefox/addon/ai-writing-companion/">
-    <img src="../docs/Store/Firefox-Store.png" alt="Firefox" height="50" />
-  </a>
-</p>
-
-*手動でのインストールについては、[インストールガイド](./guides/INSTALLATION.md)をご覧ください。*
-
-### 2. 設定
-ほとんどの AI プロバイダーには API キーが必要です。
-- [**API 設定ガイド**](./guides/API_GUIDE.md)に従って、Gemini や OpenAI などを設定してください。
-- *Google や Yandex などの無料プロバイダーは、設定なしですぐに使用できます。*
-
-### 3. ショートカットの活用
-[**ユーザーガイド**](./guides/USAGE.md)でショートカットを確認し、生産性を最大限に高めましょう。
 
 ---
 

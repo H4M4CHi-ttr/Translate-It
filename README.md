@@ -35,25 +35,80 @@
 <br>
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=oMw-CbcKPOY">
+  <a href="https://youtu.be/VxgRWlx20wU">
     <b>Watch Demo on YouTube</b>
   </a>
   <br>
-  <a href="https://www.youtube.com/watch?v=oMw-CbcKPOY">
+  <a href="https://youtu.be/VxgRWlx20wU">
     <img src="./docs/Images/Windows.png" alt="Watch the video" width="560" />
   </a>
 </p>
 
 ---
 
-## Why Translate It?
+## Goals
 
-- **Privacy First:** OCR and core processes happen locally. Your data stays in your browser.
-- **PDF Translator:** Open local or online PDF documents with intelligent page translation, bilingual reading, OCR for scanned PDFs, and TXT/Markdown/HTML export.
-- **AI-Powered:** Support for Gemini, OpenAI, DeepSeek and more.
-- **Cost-Efficient:** Save up to **70% on AI tokens** with the unique Economy Mode.
-- **Zero-Pressure Engineering:** Optimized for low-footprint operation. Keep dozens of tabs open without worrying about RAM bloat or system slowdowns.
-- **Platform Agnostic:** Seamless experience from **Desktop Chrome** to **Android Firefox**.
+- **Privacy and control:** You decide how your translations are processed. Where supported, you can use local or offline providers, or configure the cloud service you prefer.
+- **Freedom to choose:** You’re not tied to a single provider. Switch between local, free, traditional, and AI-powered services whenever you need.
+- **One tool for different needs:** Translate selected text, input fields, page elements, full pages, PDFs, subtitles, images with OCR, text on hover, and live audio.
+- **Built for everyday browsing:** Designed to work smoothly with dynamic pages, long content, continuous translation, and both desktop and mobile browsers.
+
+---
+
+## Features at a Glance
+
+| Feature | Description |
+| :--- | :--- |
+| **Text Selection** | Instant translation icon/box right where you select text. |
+| **Element Mode** | Click any UI element to translate it inline while keeping the layout. |
+| **Whole Page** | Auto-translate entire pages with lazy-loading and smart memory management. |
+| **PDF Translator** | Translate local and online PDF documents with bilingual reading, OCR support for scanned PDFs, and TXT/Markdown/HTML export. |
+| **Mouse Hover** | Instant translation tooltip triggered by moving mouse over text (supports Word/Sentence/Container scopes). |
+| **Desktop/Mobile FAB** | Multipurpose draggable hub for instant OCR, Page Translation, Element Mode, and rapid feature toggles. |
+| **In-Field (Ctrl+/)** | Translate your input inside text fields before sending. |
+| **Smart Dictionary** | Definitions, synonyms, and usage examples with multi-accent TTS. |
+| **History & Export** | Keep track of your translations and export them for later use. |
+| **Resource Tracker** | Advanced memory management to keep your browser fast. |
+
+---
+
+## Supported Providers
+
+Choose from traditional, AI, local, and specialized providers:
+
+- **Traditional:** [Google](https://translate.google.com/), [Microsoft](https://www.microsoft.com/translator/), [DeepL](https://www.deepl.com/translator), [Yandex](https://translate.yandex.com/), [Lingva](https://github.com/TheDavidDelta/lingva-translate), [Bing](https://www.bing.com/translator)
+- **AI:** [Gemini](https://ai.google.dev/), [OpenAI](https://openai.com/api/), [OpenRouter](https://openrouter.ai/), [Requesty](https://www.requesty.ai/), [DeepSeek](https://platform.deepseek.com/)
+- **Custom & Local:** OpenAI Compatible, [WebAI-to-API](https://github.com/Amm1rr/WebAI-to-API/), Browser Translation
+- **Dictionary:** [Vajehyab](https://vajehyab.com/)
+
+Some providers require an API key, while others work without one.
+
+
+---
+
+## Getting Started
+
+### 1. Installation
+Install via the official stores for the best experience:
+
+<p align="center">
+  <a target="_blank" href="https://chromewebstore.google.com/detail/AI%20Writing%20Companion%20for%20Chrome/jfkpmcnebiamnbbkpmmldomjijiahmbd/">
+    <img src="./docs/Store/Chrome-Store.png" alt="Chrome" height="50" />
+  </a>
+  <a target="_blank" href="https://addons.mozilla.org/en-GB/firefox/addon/ai-writing-companion/">
+    <img src="./docs/Store/Firefox-Store.png" alt="Firefox" height="50" />
+  </a>
+</p>
+
+*For manual installation, see the [Installation Guide](./docs/guides/INSTALLATION.md).*
+
+### 2. Configuration
+Most AI providers require an API key.
+- Follow the [**API Configuration Guide**](./docs/guides/API_GUIDE.md) to set up Gemini, OpenAI, etc.
+- *Free providers like Google and Yandex work out of the box.*
+
+### 3. Mastering Shortcuts
+Maximize your productivity with the [**User Guide**](./docs/guides/USAGE.md).
 
 ---
 
@@ -123,49 +178,6 @@ Take full control over your API costs and UI speed with **Optimization Levels (1
 ### 9. Mouse on Hover (Instant Glance)
 - **Glance-to-Translate:** Move your mouse over any text while holding a modifier key (like Ctrl) to see an instant translation in a non-intrusive tooltip.
 - **Smart Scoping:** Choose your focus: translate a single **Word**, a full **Sentence**, or the entire **Container** block automatically.
-
----
-
-## Features at a Glance
-
-| Feature | Description |
-| :--- | :--- |
-| **Text Selection** | Instant translation icon/box right where you select text. |
-| **Element Mode** | Click any UI element to translate it inline while keeping the layout. |
-| **Whole Page** | Auto-translate entire pages with lazy-loading and smart memory management. |
-| **PDF Translator** | Translate local and online PDF documents with bilingual reading, OCR support for scanned PDFs, and TXT/Markdown/HTML export. |
-| **Mouse Hover** | Instant translation tooltip triggered by moving mouse over text (supports Word/Sentence/Container scopes). |
-| **Desktop/Mobile FAB** | Multipurpose draggable hub for instant OCR, Page Translation, Element Mode, and rapid feature toggles. |
-| **In-Field (Ctrl+/)** | Translate your input inside text fields before sending. |
-| **Smart Dictionary** | Definitions, synonyms, and usage examples with multi-accent TTS. |
-| **History & Export** | Keep track of your translations and export them for later use. |
-| **Resource Tracker** | Advanced memory management to keep your browser fast. |
-
----
-
-## Getting Started
-
-### 1. Installation
-Install via the official stores for the best experience:
-
-<p align="center">
-  <a target="_blank" href="https://chromewebstore.google.com/detail/AI%20Writing%20Companion%20for%20Chrome/jfkpmcnebiamnbbkpmmldomjijiahmbd/">
-    <img src="./docs/Store/Chrome-Store.png" alt="Chrome" height="50" />
-  </a>
-  <a target="_blank" href="https://addons.mozilla.org/en-GB/firefox/addon/ai-writing-companion/">
-    <img src="./docs/Store/Firefox-Store.png" alt="Firefox" height="50" />
-  </a>
-</p>
-
-*For manual installation, see the [Installation Guide](./docs/guides/INSTALLATION.md).*
-
-### 2. Configuration
-Most AI providers require an API key. 
-- Follow the [**API Configuration Guide**](./docs/guides/API_GUIDE.md) to set up Gemini, OpenAI, etc.
-- *Free providers like Google and Yandex work out of the box.*
-
-### 3. Mastering Shortcuts
-Maximize your productivity with the [**User Guide**](./docs/guides/USAGE.md).
 
 ---
 
