@@ -1,0 +1,20 @@
+name: Other / General issue
+description: Report a project-related issue that does not fit the bug or feature templates
+title: "[Other]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for project-related issues that do not fit Bug Report or Feature Request. For questions or support, please use GitHub Discussions Q&A.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Briefly describe the issue or topic.
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Add any relevant context, links, screenshots, or other information.
