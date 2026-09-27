@@ -260,10 +260,16 @@ describe('Settings Migrations', () => {
   });
 
   it.each([
+    ['gemini-3.7-flash', 'gemini-3.8-flash'],
+    ['gemini-3.6-flash', 'gemini-3.8-flash'],
+    ['gemini-3.5-flash', 'gemini-3.8-flash'],
+    ['gemini-3.1-pro-preview', 'gemini-3.8-flash'],
+    ['gemini-3-flash-preview', 'gemini-3.8-flash'],
+    ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite'],
     ['gemini-3.1-flash-lite-preview', 'gemini-3.5-flash-lite'],
-    ['gemini-3-pro-preview', 'gemini-3.5-flash'],
-    ['gemini-2.5-pro', 'gemini-3.6-flash'],
-    ['gemini-2.5-flash', 'gemini-3.5-flash'],
+    ['gemini-3-pro-preview', 'gemini-3.8-flash'],
+    ['gemini-2.5-pro', 'gemini-3.8-flash'],
+    ['gemini-2.5-flash', 'gemini-3.8-flash'],
     ['gemini-2.5-flash-lite', 'gemini-3.5-flash-lite']
   ])('should migrate obsolete Gemini model %s to %s', async (oldModel, newModel) => {
     const { updates, logs } = await runSettingsMigrations({
@@ -277,9 +283,9 @@ describe('Settings Migrations', () => {
   });
 
   it.each([
-    ['gemini-3.1-pro-preview', 'gemini-3.6-flash'],
-    ['gemini-3-flash-preview', 'gemini-3.5-flash']
-  ])('migrates inactive preview model %s to %s', async (oldModel, newModel) => {
+    ['gemini-3.7-flash', 'gemini-3.8-flash'],
+    ['gemini-3.6-flash', 'gemini-3.8-flash']
+  ])('migrates inactive model %s to %s', async (oldModel, newModel) => {
     const activeModels = CONFIG.GEMINI_MODELS;
     CONFIG.GEMINI_MODELS = activeModels.filter(model => model.value !== oldModel);
 
@@ -295,8 +301,8 @@ describe('Settings Migrations', () => {
     }
   });
 
-  it.each(['gemini-3.1-pro-preview', 'gemini-3-flash-preview'])(
-    'preserves active preview model %s',
+  it.each(['gemini-3.8-flash', 'gemini-3.5-flash-lite'])(
+    'preserves active model %s',
     async (model) => {
       const { updates } = await runSettingsMigrations({
         GEMINI_MODELS: [{ value: 'legacy-model', label: 'Legacy' }],
@@ -307,10 +313,10 @@ describe('Settings Migrations', () => {
     }
   );
 
-  it('keeps stable Gemini 3.1 Flash-Lite distinct from preview migration ID', async () => {
+  it('keeps stable Gemini 3.5 Flash-Lite distinct from preview migration ID', async () => {
     const stableResult = await runSettingsMigrations({
       GEMINI_MODELS: [{ value: 'legacy-model', label: 'Legacy' }],
-      GEMINI_MODEL: 'gemini-3.1-flash-lite'
+      GEMINI_MODEL: 'gemini-3.5-flash-lite'
     });
     const previewResult = await runSettingsMigrations({
       GEMINI_MODELS: [{ value: 'legacy-model', label: 'Legacy' }],
@@ -322,12 +328,16 @@ describe('Settings Migrations', () => {
   });
 
   it.each([
-    ['o1', 'gpt-5.6-terra'],
-    ['o1-mini', 'gpt-5.6-luna'],
-    ['o3-mini', 'gpt-5.6-luna'],
-    ['gpt-4.5-preview', 'gpt-5.6-terra'],
-    ['chatgpt-4o-latest', 'gpt-5.6-terra'],
-    ['gpt-4o', 'gpt-5.6-terra']
+    ['gpt-5.6-luna', 'gpt-6-luna'],
+    ['gpt-4o-mini', 'gpt-6-luna'],
+    ['o1-mini', 'gpt-6-luna'],
+    ['o3-mini', 'gpt-6-luna'],
+    ['gpt-5.6-terra', 'gpt-6-sol'],
+    ['gpt-5.6-sol', 'gpt-6-sol'],
+    ['o1', 'gpt-6-sol'],
+    ['gpt-4.5-preview', 'gpt-6-sol'],
+    ['chatgpt-4o-latest', 'gpt-6-sol'],
+    ['gpt-4o', 'gpt-6-sol']
   ])('migrates inactive OpenAI model %s to %s', async (oldModel, newModel) => {
     const { updates, logs } = await runSettingsMigrations({
       OPENAI_MODELS: [{ value: oldModel, label: 'Legacy' }],
@@ -341,7 +351,11 @@ describe('Settings Migrations', () => {
   it('preserves current OpenAI static and arbitrary custom models', async () => {
     const currentStatic = await runSettingsMigrations({
       OPENAI_MODELS: [{ value: 'legacy-model', label: 'Legacy' }],
-      OPENAI_API_MODEL: 'gpt-4o-mini'
+      OPENAI_API_MODEL: 'gpt-6-luna'
+    });
+    const currentSol = await runSettingsMigrations({
+      OPENAI_MODELS: [{ value: 'legacy-model', label: 'Legacy' }],
+      OPENAI_API_MODEL: 'gpt-6-sol'
     });
     const custom = await runSettingsMigrations({
       OPENAI_MODELS: [{ value: 'legacy-model', label: 'Legacy' }],
@@ -349,6 +363,7 @@ describe('Settings Migrations', () => {
     });
 
     expect(currentStatic.updates.OPENAI_API_MODEL).toBeUndefined();
+    expect(currentSol.updates.OPENAI_API_MODEL).toBeUndefined();
     expect(custom.updates.OPENAI_API_MODEL).toBeUndefined();
   });
 
@@ -363,16 +378,19 @@ describe('Settings Migrations', () => {
   });
 
   it.each([
-    ['deepseek-chat', 'deepseek-v4-flash', 'disabled'],
-    ['deepseek-reasoner', 'deepseek-v4-flash', 'high']
-  ])('migrates inactive DeepSeek model %s to %s with %s thinking', async (oldModel, newModel, thinkingMode) => {
+    ['deepseek-v4-flash', 'deepseek-flash', 'low', undefined],
+    ['deepseek-chat', 'deepseek-flash', 'low', 'disabled'],
+    ['deepseek-reasoner', 'deepseek-flash', 'low', 'high']
+  ])('migrates inactive DeepSeek model %s to %s with %s thinking', async (oldModel, newModel, inputThinking, expectedThinking) => {
     const { updates, logs } = await runSettingsMigrations({
       DEEPSEEK_MODELS: [{ value: oldModel, label: 'Legacy' }],
-      DEEPSEEK_API_MODEL: oldModel
+      DEEPSEEK_API_MODEL: oldModel,
+      DEEPSEEK_THINKING_MODE: inputThinking
     });
 
     expect(updates.DEEPSEEK_API_MODEL).toBe(newModel);
-    expect(updates.DEEPSEEK_THINKING_MODE).toBe(thinkingMode);
+    // An already-valid Thinking Mode is preserved (no update) unless the legacy contract remaps it.
+    expect(updates.DEEPSEEK_THINKING_MODE).toBe(expectedThinking);
     expect(logs).toContain(`Migrated DEEPSEEK_API_MODEL from ${oldModel} to ${newModel}`);
   });
 
@@ -384,14 +402,14 @@ describe('Settings Migrations', () => {
       DEEPSEEK_API_MODEL: oldModel
     });
 
-    expect(updates.DEEPSEEK_API_MODEL).toBe('deepseek-v4-flash');
+    expect(updates.DEEPSEEK_API_MODEL).toBe('deepseek-flash');
     expect(updates.DEEPSEEK_THINKING_MODE).toBe(thinkingMode);
   });
 
   it('preserves current DeepSeek models and arbitrary custom IDs', async () => {
     const currentFlash = await runSettingsMigrations({
       DEEPSEEK_MODELS: [{ value: 'legacy-model', label: 'Legacy' }],
-      DEEPSEEK_API_MODEL: 'deepseek-v4-flash',
+      DEEPSEEK_API_MODEL: 'deepseek-flash',
       DEEPSEEK_THINKING_MODE: 'low'
     });
     const currentPro = await runSettingsMigrations({
@@ -413,7 +431,7 @@ describe('Settings Migrations', () => {
     expect(custom.updates.DEEPSEEK_THINKING_MODE).toBeUndefined();
   });
 
-  it('falls back to the DeepSeek V4 Flash default for an empty selection', async () => {
+  it('falls back to the DeepSeek Flash default for an empty selection', async () => {
     const { updates, logs } = await runSettingsMigrations({
       DEEPSEEK_MODELS: CONFIG.DEEPSEEK_MODELS,
       DEEPSEEK_API_MODEL: ''
@@ -421,6 +439,26 @@ describe('Settings Migrations', () => {
 
     expect(updates.DEEPSEEK_API_MODEL).toBe(CONFIG.DEEPSEEK_API_MODEL);
     expect(logs.some(log => log.includes('Reset DEEPSEEK_API_MODEL'))).toBe(true);
+  });
+
+  it.each([
+    ['openai/gpt-4o-mini', 'openai/gpt-6-luna'],
+    ['openai/gpt-4.1-mini', 'openai/gpt-6-luna'],
+    ['google/gemini-2.5-flash-lite', 'google/gemini-3.5-flash-lite'],
+    ['google/gemini-2.5-flash', 'google/gemini-3.8-flash'],
+    ['mistralai/mistral-small-3.2-24b-instruct', 'mistralai/mistral-small-2603'],
+    ['deepseek/deepseek-chat', 'deepseek/deepseek-v4.1-flash'],
+    ['qwen/qwen3.5-flash-02-23', 'qwen/qwen3.8-flash'],
+    ['anthropic/claude-sonnet-4.6', 'anthropic/claude-sonnet-5']
+  ])('migrates inactive OpenRouter model %s to %s', async (oldModel, newModel) => {
+    const { updates, logs } = await runSettingsMigrations({
+      OPENROUTER_MODELS: [{ value: oldModel, label: 'Legacy' }],
+      OPENROUTER_API_MODEL: oldModel
+    });
+
+    expect(updates.OPENROUTER_API_MODEL).toBe(newModel);
+    expect(CONFIG.OPENROUTER_MODELS.some(model => model.value === newModel)).toBe(true);
+    expect(logs).toContain(`Migrated OPENROUTER_API_MODEL from ${oldModel} to ${newModel}`);
   });
 
   it.each(CONFIG.OPENROUTER_MODELS

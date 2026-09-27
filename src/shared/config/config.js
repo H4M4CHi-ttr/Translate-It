@@ -123,58 +123,20 @@ export const CONFIG = {
 
   API_KEY: "", // Gemini specific (deprecated, use GEMINI_API_KEY)
   GEMINI_API_KEY: "", // Gemini API keys (newline-separated)
-  GEMINI_API_URL: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent", // Default Gemini API URL
-  GEMINI_MODEL: "gemini-3.5-flash", // Selected Gemini model
-  GEMINI_THINKING_MODE: "default", // Provider default or deferred minimal thinking mode
+  GEMINI_API_URL: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent", // Default Gemini API URL
+  GEMINI_MODEL: "gemini-3.8-flash", // Selected Gemini model
+  GEMINI_THINKING_MODE: "default", // Provider default or minimal thinking when supported
   GEMINI_MODELS: [
     {
-      value: "gemini-3.7-flash",
-      name: "Gemini 3.7 Flash",
-      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent",
+      value: "gemini-3.8-flash",
+      name: "Gemini 3.8 Flash",
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
       thinking: { minimal: null }
-    },
-    {
-      value: "gemini-3.6-flash",
-      name: "Gemini 3.6 Flash",
-      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
-      thinking: {
-        minimal: { type: "level", value: "minimal" }
-      }
-    },
-    {
-      value: "gemini-3.5-flash",
-      name: "Gemini 3.5 Flash",
-      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
-      thinking: {
-        minimal: { type: "level", value: "minimal" }
-      }
     },
     {
       value: "gemini-3.5-flash-lite",
       name: "Gemini 3.5 Flash-Lite",
       url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
-      thinking: { minimal: null }
-    },
-    {
-      value: "gemini-3.1-flash-lite",
-      name: "Gemini 3.1 Flash-Lite",
-      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
-      thinking: {
-        minimal: { type: "level", value: "minimal" }
-      }
-    },
-    {
-      value: "gemini-3.1-pro-preview",
-      name: "Gemini 3.1 Pro Preview",
-      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent",
-      thinking: {
-        minimal: { type: "level", value: "minimal" }
-      }
-    },
-    {
-      value: "gemini-3-flash-preview",
-      name: "Gemini 3 Flash Preview",
-      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent",
       thinking: {
         minimal: { type: "level", value: "minimal" }
       }
@@ -198,28 +160,25 @@ export const CONFIG = {
   ],
   OPENAI_API_KEY: "",
   OPENAI_API_URL: "https://api.openai.com/v1/chat/completions",
-  OPENAI_API_MODEL: "gpt-5.6-luna",
+  OPENAI_API_MODEL: "gpt-6-luna",
   OPENAI_MODELS: [
-    { value: "gpt-5.6-terra", name: "GPT-5.6 Terra" },
-    { value: "gpt-5.6-luna", name: "GPT-5.6 Luna" },
-    { value: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
-    { value: "gpt-4o-mini", name: "GPT-4o Mini" },
+    { value: "gpt-6-luna", name: "GPT-6 Luna" },
+    { value: "gpt-6-sol", name: "GPT-6 Sol" },
     { value: "custom", name: "Custom Model" }
   ],
   OPENROUTER_API_KEY: "",
   OPENROUTER_API_URL: "https://openrouter.ai/api/v1/chat/completions",
-  OPENROUTER_API_MODEL: "openai/gpt-4o-mini",
+  OPENROUTER_API_MODEL: "openai/gpt-6-luna",
   OPENROUTER_MODELS: [
-    { value: "openai/gpt-4o-mini", name: "OpenAI GPT-4o Mini" },
-    { value: "google/gemini-2.5-flash-lite", name: "Google Gemini 2.5 Flash-Lite" },
-    { value: "mistralai/mistral-small-3.2-24b-instruct", name: "Mistral Small 3.2" },
-    { value: "google/gemini-2.5-flash", name: "Google Gemini 2.5 Flash" },
+    { value: "openai/gpt-6-luna", name: "OpenAI GPT-6 Luna" },
+    { value: "google/gemini-3.5-flash-lite", name: "Google Gemini 3.5 Flash-Lite" },
+    { value: "mistralai/mistral-small-2603", name: "Mistral Small 4" },
+    { value: "google/gemini-3.8-flash", name: "Google Gemini 3.8 Flash" },
     { value: "anthropic/claude-haiku-4.5", name: "Anthropic Claude Haiku 4.5" },
-    { value: "openai/gpt-4.1-mini", name: "OpenAI GPT-4.1 Mini" },
-    { value: "deepseek/deepseek-chat", name: "DeepSeek Chat" },
-    { value: "qwen/qwen3.5-flash-02-23", name: "Qwen 3.5 Flash" },
+    { value: "deepseek/deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash" },
+    { value: "qwen/qwen3.8-flash", name: "Qwen 3.8 Flash" },
     { value: "meta-llama/llama-3.3-70b-instruct", name: "Meta Llama 3.3 70B" },
-    { value: "anthropic/claude-sonnet-4.6", name: "Anthropic Claude Sonnet 4.6" },
+    { value: "anthropic/claude-sonnet-5", name: "Anthropic Claude Sonnet 5" },
     { value: "google/gemma-4-26b-a4b-it:free", name: "Google Gemma 4 26B A4B (Free)" },
     { value: "nvidia/nemotron-3-super-120b-a12b:free", name: "NVIDIA Nemotron 3 Super (Free)" },
     { value: "custom", name: "Custom Model" }
@@ -241,7 +200,7 @@ export const CONFIG = {
   ],
   DEEPSEEK_API_KEY: "",
   DEEPSEEK_API_URL: "https://api.deepseek.com/chat/completions",
-  DEEPSEEK_API_MODEL: "deepseek-v4-flash",
+  DEEPSEEK_API_MODEL: "deepseek-flash",
   DEEPSEEK_THINKING_MODE: "disabled",
   DEEPSEEK_THINKING_MODE_OPTIONS: [
     { value: "disabled", name: "Disabled" },
@@ -250,7 +209,7 @@ export const CONFIG = {
     { value: "max", name: "Max" }
   ],
   DEEPSEEK_MODELS: [
-    { value: "deepseek-v4-flash", name: "DeepSeek V4 Flash", supportsThinking: true },
+    { value: "deepseek-flash", name: "DeepSeek Flash", supportsThinking: true },
     { value: "deepseek-v4-pro", name: "DeepSeek V4 Pro", supportsThinking: true },
     { value: "custom", name: "Custom Model", supportsThinking: false }
   ],

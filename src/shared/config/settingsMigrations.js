@@ -29,24 +29,43 @@ const logger = getScopedLogger(LOG_COMPONENTS.CONFIG, 'SettingsMigrations');
 
 const MODEL_VALUE_MIGRATIONS = {
   OPENAI_MODELS: {
-    o1: 'gpt-5.6-terra',
-    'o1-mini': 'gpt-5.6-luna',
-    'o3-mini': 'gpt-5.6-luna',
-    'gpt-4.5-preview': 'gpt-5.6-terra',
-    'chatgpt-4o-latest': 'gpt-5.6-terra',
-    'gpt-4o': 'gpt-5.6-terra'
+    'gpt-5.6-luna': 'gpt-6-luna',
+    'gpt-4o-mini': 'gpt-6-luna',
+    'o1-mini': 'gpt-6-luna',
+    'o3-mini': 'gpt-6-luna',
+    'gpt-5.6-terra': 'gpt-6-sol',
+    'gpt-5.6-sol': 'gpt-6-sol',
+    o1: 'gpt-6-sol',
+    'gpt-4.5-preview': 'gpt-6-sol',
+    'chatgpt-4o-latest': 'gpt-6-sol',
+    'gpt-4o': 'gpt-6-sol'
   },
   DEEPSEEK_MODELS: {
-    'deepseek-chat': 'deepseek-v4-flash',
-    'deepseek-reasoner': 'deepseek-v4-flash'
+    'deepseek-v4-flash': 'deepseek-flash',
+    'deepseek-chat': 'deepseek-flash',
+    'deepseek-reasoner': 'deepseek-flash'
+  },
+  OPENROUTER_MODELS: {
+    'openai/gpt-4o-mini': 'openai/gpt-6-luna',
+    'openai/gpt-4.1-mini': 'openai/gpt-6-luna',
+    'google/gemini-2.5-flash-lite': 'google/gemini-3.5-flash-lite',
+    'google/gemini-2.5-flash': 'google/gemini-3.8-flash',
+    'mistralai/mistral-small-3.2-24b-instruct': 'mistralai/mistral-small-2603',
+    'deepseek/deepseek-chat': 'deepseek/deepseek-v4.1-flash',
+    'qwen/qwen3.5-flash-02-23': 'qwen/qwen3.8-flash',
+    'anthropic/claude-sonnet-4.6': 'anthropic/claude-sonnet-5'
   },
   GEMINI_MODELS: {
+    'gemini-3.7-flash': 'gemini-3.8-flash',
+    'gemini-3.6-flash': 'gemini-3.8-flash',
+    'gemini-3.5-flash': 'gemini-3.8-flash',
+    'gemini-3.1-pro-preview': 'gemini-3.8-flash',
+    'gemini-3-flash-preview': 'gemini-3.8-flash',
+    'gemini-3.1-flash-lite': 'gemini-3.5-flash-lite',
     'gemini-3.1-flash-lite-preview': 'gemini-3.5-flash-lite',
-    'gemini-3.1-pro-preview': 'gemini-3.6-flash',
-    'gemini-3-pro-preview': 'gemini-3.5-flash',
-    'gemini-3-flash-preview': 'gemini-3.5-flash',
-    'gemini-2.5-pro': 'gemini-3.6-flash',
-    'gemini-2.5-flash': 'gemini-3.5-flash',
+    'gemini-3-pro-preview': 'gemini-3.8-flash',
+    'gemini-2.5-pro': 'gemini-3.8-flash',
+    'gemini-2.5-flash': 'gemini-3.8-flash',
     'gemini-2.5-flash-lite': 'gemini-3.5-flash-lite'
   }
 };

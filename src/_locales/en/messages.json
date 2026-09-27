@@ -1284,7 +1284,7 @@
     "message": "Model"
   },
   "openrouter_api_model_placeholder": {
-    "message": "Enter OpenRouter model (e.g., openai/gpt-4o)"
+    "message": "Enter OpenRouter model"
   },
   "deepseek_api_settings_title": {
     "message": "DeepSeek Settings"
@@ -1299,7 +1299,7 @@
     "message": "Model"
   },
   "deepseek_api_model_placeholder": {
-    "message": "Enter DeepSeek model (e.g., deepseek-v4-flash)"
+    "message": "Enter DeepSeek model"
   },
   "deepseek_thinking_mode_label": {
     "message": "Thinking Mode"
@@ -2160,7 +2160,7 @@
     "message": "Minimal"
   },
   "gemini_thinking_mode_description": {
-    "message": "Provider Default uses provider behavior. Minimal is saved for future provider support."
+    "message": "Provider Default uses provider behavior. Minimal is applied only when the selected model supports it."
   },
   "advance_section_title": {
     "message": "Advanced Settings"

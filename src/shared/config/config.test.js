@@ -94,12 +94,10 @@ describe('Config Module', () => {
 
     it('should expose approved OpenAI text models in order', () => {
       expect(CONFIG.OPENAI_API_URL).toBe('https://api.openai.com/v1/chat/completions');
-      expect(CONFIG.OPENAI_API_MODEL).toBe('gpt-5.6-luna');
+      expect(CONFIG.OPENAI_API_MODEL).toBe('gpt-6-luna');
       expect(CONFIG.OPENAI_MODELS.map(model => model.value)).toEqual([
-        'gpt-5.6-terra',
-        'gpt-5.6-luna',
-        'gpt-5.6-sol',
-        'gpt-4o-mini',
+        'gpt-6-luna',
+        'gpt-6-sol',
         'custom'
       ]);
       expect(CONFIG.OPENAI_MODELS).not.toEqual(
@@ -109,13 +107,14 @@ describe('Config Module', () => {
           expect.objectContaining({ value: 'o3-mini' }),
           expect.objectContaining({ value: 'gpt-4.5-preview' }),
           expect.objectContaining({ value: 'gpt-4o' }),
+          expect.objectContaining({ value: 'gpt-4o-mini' }),
           expect.objectContaining({ value: 'chatgpt-4o-latest' })
         ])
       );
     });
 
     it('should expose approved DeepSeek text models in order', () => {
-      expect(CONFIG.DEEPSEEK_API_MODEL).toBe('deepseek-v4-flash');
+      expect(CONFIG.DEEPSEEK_API_MODEL).toBe('deepseek-flash');
       expect(CONFIG.DEEPSEEK_API_URL).toBe('https://api.deepseek.com/chat/completions');
       expect(CONFIG.DEEPSEEK_THINKING_MODE).toBe('disabled');
       expect(CONFIG.DEEPSEEK_THINKING_MODE_OPTIONS.map(option => option.value)).toEqual([
@@ -126,8 +125,8 @@ describe('Config Module', () => {
       ]);
       expect(CONFIG.DEEPSEEK_MODELS).toEqual([
         {
-          value: 'deepseek-v4-flash',
-          name: 'DeepSeek V4 Flash',
+          value: 'deepseek-flash',
+          name: 'DeepSeek Flash',
           supportsThinking: true
         },
         {
@@ -150,19 +149,18 @@ describe('Config Module', () => {
     });
 
     it('should expose the curated OpenRouter models in order', () => {
-      expect(CONFIG.OPENROUTER_API_MODEL).toBe('openai/gpt-4o-mini');
+      expect(CONFIG.OPENROUTER_API_MODEL).toBe('openai/gpt-6-luna');
       expect(CONFIG.OPENROUTER_API_URL).toBe('https://openrouter.ai/api/v1/chat/completions');
       expect(CONFIG.OPENROUTER_MODELS).toEqual([
-        { value: 'openai/gpt-4o-mini', name: 'OpenAI GPT-4o Mini' },
-        { value: 'google/gemini-2.5-flash-lite', name: 'Google Gemini 2.5 Flash-Lite' },
-        { value: 'mistralai/mistral-small-3.2-24b-instruct', name: 'Mistral Small 3.2' },
-        { value: 'google/gemini-2.5-flash', name: 'Google Gemini 2.5 Flash' },
+        { value: 'openai/gpt-6-luna', name: 'OpenAI GPT-6 Luna' },
+        { value: 'google/gemini-3.5-flash-lite', name: 'Google Gemini 3.5 Flash-Lite' },
+        { value: 'mistralai/mistral-small-2603', name: 'Mistral Small 4' },
+        { value: 'google/gemini-3.8-flash', name: 'Google Gemini 3.8 Flash' },
         { value: 'anthropic/claude-haiku-4.5', name: 'Anthropic Claude Haiku 4.5' },
-        { value: 'openai/gpt-4.1-mini', name: 'OpenAI GPT-4.1 Mini' },
-        { value: 'deepseek/deepseek-chat', name: 'DeepSeek Chat' },
-        { value: 'qwen/qwen3.5-flash-02-23', name: 'Qwen 3.5 Flash' },
+        { value: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
+        { value: 'qwen/qwen3.8-flash', name: 'Qwen 3.8 Flash' },
         { value: 'meta-llama/llama-3.3-70b-instruct', name: 'Meta Llama 3.3 70B' },
-        { value: 'anthropic/claude-sonnet-4.6', name: 'Anthropic Claude Sonnet 4.6' },
+        { value: 'anthropic/claude-sonnet-5', name: 'Anthropic Claude Sonnet 5' },
         { value: 'google/gemma-4-26b-a4b-it:free', name: 'Google Gemma 4 26B A4B (Free)' },
         { value: 'nvidia/nemotron-3-super-120b-a12b:free', name: 'NVIDIA Nemotron 3 Super (Free)' },
         { value: 'custom', name: 'Custom Model' }
@@ -170,7 +168,7 @@ describe('Config Module', () => {
       const curatedModels = CONFIG.OPENROUTER_MODELS.filter(model => model.value !== 'custom');
       const freeModels = curatedModels.filter(model => model.value.endsWith(':free'));
 
-      expect(curatedModels).toHaveLength(12);
+      expect(curatedModels).toHaveLength(11);
       expect(freeModels).toHaveLength(2);
       expect(freeModels.every(model => model.name.includes('(Free)'))).toBe(true);
       expect(CONFIG.OPENROUTER_MODELS.at(-1)).toEqual({ value: 'custom', name: 'Custom Model' });
@@ -194,18 +192,13 @@ describe('Config Module', () => {
     });
 
     it('should expose approved Gemini selector models in order', () => {
-      expect(CONFIG.GEMINI_MODEL).toBe('gemini-3.5-flash');
+      expect(CONFIG.GEMINI_MODEL).toBe('gemini-3.8-flash');
       expect(CONFIG.GEMINI_API_URL).toBe(
-        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent'
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent'
       );
       expect(CONFIG.GEMINI_MODELS.map(model => model.value)).toEqual([
-        'gemini-3.7-flash',
-        'gemini-3.6-flash',
-        'gemini-3.5-flash',
+        'gemini-3.8-flash',
         'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
-        'gemini-3.1-pro-preview',
-        'gemini-3-flash-preview',
         'custom'
       ]);
       expect(CONFIG.GEMINI_MODELS.every(model => !model.value.startsWith('gemini-2.5-'))).toBe(true);
@@ -214,45 +207,15 @@ describe('Config Module', () => {
     it('should retain exact Gemini model endpoints and Thinking metadata', () => {
       expect(CONFIG.GEMINI_MODELS).toEqual([
         expect.objectContaining({
-          value: 'gemini-3.7-flash',
-          name: 'Gemini 3.7 Flash',
-          url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent',
+          value: 'gemini-3.8-flash',
+          name: 'Gemini 3.8 Flash',
+          url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent',
           thinking: { minimal: null }
-        }),
-        expect.objectContaining({
-          value: 'gemini-3.6-flash',
-          name: 'Gemini 3.6 Flash',
-          url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent',
-          thinking: { minimal: { type: 'level', value: 'minimal' } }
-        }),
-        expect.objectContaining({
-          value: 'gemini-3.5-flash',
-          name: 'Gemini 3.5 Flash',
-          url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent',
-          thinking: { minimal: { type: 'level', value: 'minimal' } }
         }),
         expect.objectContaining({
           value: 'gemini-3.5-flash-lite',
           name: 'Gemini 3.5 Flash-Lite',
           url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent',
-          thinking: { minimal: null }
-        }),
-        expect.objectContaining({
-          value: 'gemini-3.1-flash-lite',
-          name: 'Gemini 3.1 Flash-Lite',
-          url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent',
-          thinking: { minimal: { type: 'level', value: 'minimal' } }
-        }),
-        expect.objectContaining({
-          value: 'gemini-3.1-pro-preview',
-          name: 'Gemini 3.1 Pro Preview',
-          url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent',
-          thinking: { minimal: { type: 'level', value: 'minimal' } }
-        }),
-        expect.objectContaining({
-          value: 'gemini-3-flash-preview',
-          name: 'Gemini 3 Flash Preview',
-          url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent',
           thinking: { minimal: { type: 'level', value: 'minimal' } }
         }),
         { value: 'custom', name: 'Custom Model', custom: true }
