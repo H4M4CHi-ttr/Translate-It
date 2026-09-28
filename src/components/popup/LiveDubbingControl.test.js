@@ -3837,4 +3837,939 @@ describe('LiveDubbingControl', () => {
     })
   })
 
+  // ── Transcript-delivery availability (subtitles note) ──────────────────────
+  // The note renders the sanitized getStatus boolean only: notifications only
+  // trigger a re-read, never render payload data directly.
+
+  describe('transcript delivery unavailable note', () => {
+    const subtitlesNote = (wrapper) => wrapper.findAll('.ti-live-dubbing-control-volume-error')
+      .find((paragraph) => paragraph.text().includes('Subtitles unavailable on this tab.'))
+    const runningWithFlag = (extra = {}) => ({
+      status: { status: 'RUNNING', sessionId: 'session-1', providerId: 'gemini' },
+      transcriptDeliveryUnavailable: true,
+      ...extra
+    })
+
+    it('renders the note while running without affecting START/STOP', async () => {
+      sendMessage.mockImplementation(({ action }) => action === 'GET_LIVE_DUBBING_STATUS'
+        ? Promise.resolve(runningWithFlag())
+        : Promise.resolve({ status: 'idle' }))
+      const wrapper = await mountAndFlush()
+
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+      const note = subtitlesNote(wrapper)
+      expect(note.exists()).toBe(true)
+      expect(note.attributes('role')).toBe('status')
+      expect(note.attributes('role')).not.toBe('alert')
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').exists()).toBe(true)
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').attributes('disabled')).toBeUndefined()
+      expect(wrapper.find('button[aria-label="Start live dubbing"]').exists()).toBe(false)
+    })
+
+    it('renders the note while starting with an active session', async () => {
+      sendMessage.mockImplementation(({ action }) => action === 'GET_LIVE_DUBBING_STATUS'
+        ? Promise.resolve({
+            status: { status: 'PREPARING_CAPTURE', sessionId: 'session-1', providerId: 'gemini' },
+            transcriptDeliveryUnavailable: true
+          })
+        : Promise.resolve({ status: 'idle' }))
+      const wrapper = await mountAndFlush()
+
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+    })
+
+    it('resolves the note text through i18n', async () => {
+      mockI18nMap.live_dubbing_subtitles_unavailable = 'Untertitel auf diesem Tab nicht verfügbar.'
+      sendMessage.mockImplementation(({ action }) => action === 'GET_LIVE_DUBBING_STATUS'
+        ? Promise.resolve(runningWithFlag())
+        : Promise.resolve({ status: 'idle' }))
+      const wrapper = await mountAndFlush()
+
+      expect(wrapper.text()).toContain('Untertitel auf diesem Tab nicht verfügbar.')
+    })
+
+    it('renders no note when the flag is absent or false', async () => {
+      for (const response of [
+        { status: { status: 'RUNNING', sessionId: 'session-1', providerId: 'gemini' } },
+        { status: { status: 'RUNNING', sessionId: 'session-1', providerId: 'gemini' }, transcriptDeliveryUnavailable: false }
+      ]) {
+        sendMessage.mockImplementation(({ action }) => action === 'GET_LIVE_DUBBING_STATUS'
+          ? Promise.resolve(response)
+          : Promise.resolve({ status: 'idle' }))
+        const wrapper = await mountAndFlush()
+
+        expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+        expect(subtitlesNote(wrapper)).toBeUndefined()
+        wrapper.unmount()
+      }
+    })
+
+    it('renders no note for a stale flag with no active session', async () => {
+      sendMessage.mockImplementation(({ action }) => action === 'GET_LIVE_DUBBING_STATUS'
+        ? Promise.resolve({ status: 'idle', transcriptDeliveryUnavailable: true })
+        : Promise.resolve({ status: 'idle' }))
+      const wrapper = await mountAndFlush()
+
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)).toBeUndefined()
+      expect(wrapper.find('button[aria-label="Start live dubbing"]').exists()).toBe(true)
+      expect(wrapper.find('button[aria-label="Start live dubbing"]').attributes('disabled')).toBeUndefined()
+    })
+
+    it('never renders raw error text in the note', async () => {
+      sendMessage.mockImplementation(({ action }) => action === 'GET_LIVE_DUBBING_STATUS'
+        ? Promise.resolve(runningWithFlag({ status: { status: 'RUNNING', sessionId: 'session-1', providerId: 'gemini', lastError: 'RAW_CAPTURE_BOOM' } }))
+        : Promise.resolve({ status: 'idle' }))
+      const wrapper = await mountAndFlush()
+
+      const note = subtitlesNote(wrapper)
+      expect(note.exists()).toBe(true)
+      expect(note.text()).toBe('Subtitles unavailable on this tab.')
+      expect(note.text()).not.toContain('RAW_CAPTURE_BOOM')
+    })
+
+    it('re-reads status on an authenticated transcript-delivery notification', async () => {
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          return Promise.resolve({ status: 'idle' })
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      expect(statusReads).toBe(1)
+
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-1' } }, {
+        id: 'extension-id', url: 'chrome-extension://extension-id/'
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      expect(statusReads).toBe(2)
+      // Notification payloads never render directly.
+      expect(wrapper.text()).not.toContain('session-1')
+
+      // Untrusted senders are still ignored.
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: {} }, { id: 'other-id' })
+      await flushPromises(wrapper)
+
+      expect(statusReads).toBe(2)
+    })
+  })
+
+  describe('transcript delivery notification racing lifecycle operations', () => {
+    const authorizedSender = { id: 'extension-id', url: 'chrome-extension://extension-id/' }
+    const subtitlesNote = (wrapper) => wrapper.findAll('.ti-live-dubbing-control-volume-error')
+      .find((paragraph) => paragraph.text().includes('Subtitles unavailable on this tab.'))
+
+    it('does not invalidate a pending START when a delivery notification arrives', async () => {
+      let resolveStart
+      const startGate = new Promise((resolve) => { resolveStart = resolve })
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) return Promise.resolve({ status: 'idle' })
+          return Promise.resolve({
+            status: { status: 'CONNECTING_PROVIDER', sessionId: 'session-A', providerId: 'gemini' },
+            transcriptDeliveryUnavailable: true,
+          })
+        }
+        if (action === 'START_LIVE_DUBBING') return startGate
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      expect(statusReads).toBe(1)
+
+      await wrapper.find('button[aria-label="Start live dubbing"]').trigger('click')
+      await flushPromises(wrapper)
+      expect(wrapper.text()).toContain('Starting')
+
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-A' } }, authorizedSender)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(2)
+
+      resolveStart({ success: true, status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' } })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      expect(wrapper.text()).toContain('Running')
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').exists()).toBe(true)
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').attributes('disabled')).toBeUndefined()
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)?.exists()).toBe(true)
+    })
+
+    it('ignores a late delivery refresh for a superseded session', async () => {
+      let resolveRefreshA
+      const refreshGateA = new Promise((resolve) => { resolveRefreshA = resolve })
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+              transcriptDeliveryUnavailable: false,
+            })
+          }
+          if (statusReads === 2) return refreshGateA
+          return Promise.resolve({
+            status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+            transcriptDeliveryUnavailable: false,
+          })
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-A' } }, authorizedSender)
+      await flushPromises(wrapper)
+
+      // A newer lifecycle generation supersedes to session B.
+      runtimeListener({ action: 'LIVE_DUBBING_TERMINAL_OUTCOME', data: {} }, authorizedSender)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(3)
+
+      resolveRefreshA({
+        status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: true,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)).toBeUndefined()
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').exists()).toBe(true)
+    })
+    it('ignores a stale overlapping refresh for the same session', async () => {
+      let resolveRefresh1
+      const refreshGate1 = new Promise((resolve) => { resolveRefresh1 = resolve })
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+              transcriptDeliveryUnavailable: false,
+            })
+          }
+          if (statusReads === 2) return refreshGate1
+          return Promise.resolve({
+            status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+            transcriptDeliveryUnavailable: false,
+          })
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+
+      // Refresh #1 starts and stays pending.
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-A' } }, authorizedSender)
+      await flushPromises(wrapper)
+      // Refresh #2 starts and resolves available.
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-A' } }, authorizedSender)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(3)
+
+      // Refresh #1 resolves late with stale unavailable state: ignored.
+      resolveRefresh1({
+        status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: true,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      expect(wrapper.text()).toContain('Running')
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)).toBeUndefined()
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').exists()).toBe(true)
+    })
+
+    it('does not leak a subtitle note across STOP into a new session', async () => {
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          return Promise.resolve({
+            status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+            transcriptDeliveryUnavailable: true,
+          })
+        }
+        if (action === 'STOP_LIVE_DUBBING') return Promise.resolve({ status: 'idle' })
+        if (action === 'START_LIVE_DUBBING') {
+          return Promise.resolve({
+            success: true,
+            status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+          })
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+
+      await wrapper.find('button[aria-label="Stop live dubbing"]').trigger('click')
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(wrapper.find('button[aria-label="Start live dubbing"]').exists()).toBe(true)
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+
+      await wrapper.find('button[aria-label="Start live dubbing"]').trigger('click')
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      expect(wrapper.text()).toContain('Running')
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)).toBeUndefined()
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').exists()).toBe(true)
+    })
+
+    it('ignores a session-A refresh that resolves after STOP cleared the session', async () => {
+      let resolveRefreshA
+      const refreshGateA = new Promise((resolve) => { resolveRefreshA = resolve })
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+              transcriptDeliveryUnavailable: false,
+            })
+          }
+          return refreshGateA
+        }
+        if (action === 'STOP_LIVE_DUBBING') return Promise.resolve({ status: 'idle' })
+        if (action === 'START_LIVE_DUBBING') {
+          return Promise.resolve({
+            success: true,
+            status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+          })
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-A' } }, authorizedSender)
+      await flushPromises(wrapper)
+
+      await wrapper.find('button[aria-label="Stop live dubbing"]').trigger('click')
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(wrapper.find('button[aria-label="Start live dubbing"]').exists()).toBe(true)
+
+      resolveRefreshA({
+        status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: true,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      await wrapper.find('button[aria-label="Start live dubbing"]').trigger('click')
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      expect(wrapper.text()).toContain('Running')
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)).toBeUndefined()
+    })
+
+    it('preserves the retained session when STOP fails with cleanup pending', async () => {
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          return Promise.resolve({
+            status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+            transcriptDeliveryUnavailable: true,
+          })
+        }
+        if (action === 'STOP_LIVE_DUBBING') return Promise.reject(new Error('stop transport boom'))
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+
+      await wrapper.find('button[aria-label="Stop live dubbing"]').trigger('click')
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      // Retained session: cleanup required, Start held disabled, no idle reset.
+      expect(wrapper.text()).toContain('Cleanup required')
+      expect(wrapper.text()).not.toContain('Running')
+      const startButton = wrapper.find('button[aria-label="Start live dubbing"]')
+      expect(startButton.exists()).toBe(true)
+      expect(startButton.attributes('disabled')).toBeDefined()
+    })
+
+    it('keeps lifecycle invalidation for terminal notifications', async () => {
+      let resolveStart
+      const startGate = new Promise((resolve) => { resolveStart = resolve })
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          return Promise.resolve({ status: 'idle' })
+        }
+        if (action === 'START_LIVE_DUBBING') return startGate
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+
+      await wrapper.find('button[aria-label="Start live dubbing"]').trigger('click')
+      await flushPromises(wrapper)
+      expect(wrapper.text()).toContain('Starting')
+
+      runtimeListener({ action: 'LIVE_DUBBING_TERMINAL_OUTCOME', data: {} }, authorizedSender)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(2)
+
+      resolveStart({ success: true, status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' } })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      // The START response was invalidated by the terminal refresh.
+      expect(wrapper.text()).not.toContain('Running')
+      expect(wrapper.find('button[aria-label="Start live dubbing"]').exists()).toBe(true)
+    })
+
+    it('keeps a newer refresh warning when an older lifecycle read resolves', async () => {
+      let resolveOldGet
+      const oldGetGate = new Promise((resolve) => { resolveOldGet = resolve })
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+              transcriptDeliveryUnavailable: false,
+            })
+          }
+          if (statusReads === 2) return oldGetGate
+          return Promise.resolve({
+            status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+            transcriptDeliveryUnavailable: true,
+          })
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+
+      // An older lifecycle read starts (terminal notification invalidates the view).
+      runtimeListener({ action: 'LIVE_DUBBING_TERMINAL_OUTCOME', data: {} }, authorizedSender)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(2)
+
+      // A delivery notification refresh resolves unavailable while it is pending.
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-A' } }, authorizedSender)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(3)
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+
+      // The older lifecycle read resolves with a stale available flag.
+      resolveOldGet({
+        status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: false,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      // Lifecycle portion still applies; the stale flag must not hide the warning.
+      expect(wrapper.text()).toContain('Running')
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)?.exists()).toBe(true)
+    })
+
+    it('does not let an old session notification fence a pending new-session status', async () => {
+      let resolveStatusB
+      const statusGateB = new Promise((resolve) => { resolveStatusB = resolve })
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+              transcriptDeliveryUnavailable: false,
+            })
+          }
+          if (statusReads === 2) return statusGateB
+          // Notification A's read sees B, so it must not record state for A.
+          return Promise.resolve({
+            status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+            transcriptDeliveryUnavailable: false,
+          })
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+
+      // A lifecycle status GET that will return B starts and stays pending.
+      runtimeListener({ action: 'LIVE_DUBBING_TERMINAL_OUTCOME', data: {} }, authorizedSender)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(2)
+
+      // Delayed notification for A starts a separate refresh; its authoritative
+      // response sees B and cannot create an A token/state that fences B.
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-A' } }, authorizedSender)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(3)
+
+      resolveStatusB({
+        status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: true,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      expect(wrapper.text()).toContain('Running')
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)?.exists()).toBe(true)
+    })
+
+    it('keeps a same-session notification newer than a pending status response', async () => {
+      let resolveStatusB
+      const statusGateB = new Promise((resolve) => { resolveStatusB = resolve })
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+              transcriptDeliveryUnavailable: false,
+            })
+          }
+          if (statusReads === 2) return statusGateB
+          return Promise.resolve({
+            status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+            transcriptDeliveryUnavailable: true,
+          })
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+
+      runtimeListener({ action: 'LIVE_DUBBING_TERMINAL_OUTCOME', data: {} }, authorizedSender)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(2)
+
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-B' } }, authorizedSender)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(3)
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+
+      resolveStatusB({
+        status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: false,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      expect(wrapper.text()).toContain('Running')
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)?.exists()).toBe(true)
+    })
+
+    it('keeps B presentation when an older A refresh resolves before B lifecycle adoption', async () => {
+      let resolveLifecycleB
+      const lifecycleGateB = new Promise((resolve) => { resolveLifecycleB = resolve })
+      let resolveRefreshA
+      const refreshGateA = new Promise((resolve) => { resolveRefreshA = resolve })
+      let resolveRefreshB
+      const refreshGateB = new Promise((resolve) => { resolveRefreshB = resolve })
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+              transcriptDeliveryUnavailable: false,
+            })
+          }
+          if (statusReads === 2) return lifecycleGateB
+          if (statusReads === 3) return refreshGateA
+          return refreshGateB
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+
+      // Lifecycle read for B starts and remains pending while UI owns A.
+      runtimeListener({ action: 'LIVE_DUBBING_TERMINAL_OUTCOME', data: {} }, authorizedSender)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(2)
+
+      // Start independent refreshes for A and B, both still pending.
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-A' } }, authorizedSender)
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-B' } }, authorizedSender)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(4)
+
+      // B resolves first. Its unavailable state belongs to B but is not
+      // rendered while lifecycle still owns A.
+      resolveRefreshB({
+        status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: true,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+      expect(wrapper.vm.subtitlesUnavailableBySession.get('session-B')).toBe(true)
+
+      // Older A refresh resolves later; it updates only A's record.
+      resolveRefreshA({
+        status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: true,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(wrapper.vm.subtitlesUnavailableBySession.get('session-A')).toBe(true)
+      expect(wrapper.vm.subtitlesUnavailableBySession.get('session-B')).toBe(true)
+
+      // The lifecycle response is fenced by B's newer refresh but adopts B;
+      // B's stored warning survives A's later result and is now rendered.
+      resolveLifecycleB({
+        status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: false,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      expect(wrapper.text()).toContain('Running')
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)?.exists()).toBe(true)
+      expect(wrapper.vm.subtitlesUnavailableBySession.has('session-A')).toBe(false)
+      expect(wrapper.vm.subtitlesUnavailableBySession.get('session-B')).toBe(true)
+    })
+
+    it('keeps a newer refresh warning when volume recovery resolves older state', async () => {
+      let resolveRecoveryStatus
+      const recoveryGate = new Promise((resolve) => { resolveRecoveryStatus = resolve })
+      let statusReads = 0
+      let volumeReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini', eventSequence: 1 },
+              transcriptDeliveryUnavailable: false,
+            })
+          }
+          if (statusReads === 2) return recoveryGate
+          return Promise.resolve({
+            status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini', eventSequence: 1 },
+            transcriptDeliveryUnavailable: true,
+          })
+        }
+        if (action === 'GET_LIVE_DUBBING_ORIGINAL_VOLUME') {
+          volumeReads += 1
+          if (volumeReads === 1) {
+            return Promise.resolve({ success: false, error: 'LIVE_DUBBING_SESSION_MISMATCH' })
+          }
+          return Promise.resolve({ success: true, originalVolume: 0.5 })
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      // The initial volume mismatch entered recovery with a pending status read.
+      expect(statusReads).toBe(2)
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+
+      // A delivery notification refresh resolves unavailable while recovery pends.
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-A' } }, authorizedSender)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(3)
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+
+      // The older recovery read resolves with a stale available flag.
+      resolveRecoveryStatus({
+        status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini', eventSequence: 1 },
+        transcriptDeliveryUnavailable: false,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      // The stale flag must not hide the warning; volume recovery still completes.
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)?.exists()).toBe(true)
+      expect(wrapper.find('.ti-live-dubbing-control-volume-value').text()).toBe('50%')
+    })
+
+    it('adopts a newer B refresh when lifecycle adopts B with a stale flag', async () => {
+      let resolveLifecycleB
+      const lifecycleGateB = new Promise((resolve) => { resolveLifecycleB = resolve })
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+              transcriptDeliveryUnavailable: false,
+            })
+          }
+          if (statusReads === 2) return lifecycleGateB
+          return Promise.resolve({
+            status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+            transcriptDeliveryUnavailable: true,
+          })
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+
+      // A lifecycle read for the new session B starts before it is adopted.
+      runtimeListener({ action: 'LIVE_DUBBING_TERMINAL_OUTCOME', data: {} }, authorizedSender)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(2)
+
+      // A delivery notification for B refreshes and records B unavailable
+      // while popup lifecycle still displays A: recorded, not yet rendered.
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-B' } }, authorizedSender)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(3)
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+
+      // The older lifecycle read adopts B with a stale available flag.
+      resolveLifecycleB({
+        status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: false,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      // Lifecycle adopts B; the newer presentation value recorded for B wins.
+      expect(wrapper.text()).toContain('Running')
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)?.exists()).toBe(true)
+    })
+
+    it('preserves B refresh state when a later replacement status omits the flag', async () => {
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+              transcriptDeliveryUnavailable: false,
+            })
+          }
+          if (statusReads === 2) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+              transcriptDeliveryUnavailable: true,
+            })
+          }
+          return Promise.resolve({ status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' } })
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+
+      // Record B's authoritative state while UI still owns A.
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-B' } }, authorizedSender)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(2)
+      expect(wrapper.vm.subtitlesUnavailableBySession.get('session-B')).toBe(true)
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+
+      // A later lifecycle read starts after that refresh (not fenced), adopts
+      // B, and omits the subtitle flag; it must preserve B's stored record.
+      runtimeListener({ action: 'LIVE_DUBBING_TERMINAL_OUTCOME', data: {} }, authorizedSender)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(3)
+
+      expect(wrapper.text()).toContain('Running')
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)?.exists()).toBe(true)
+      expect(wrapper.vm.subtitlesUnavailableBySession.get('session-B')).toBe(true)
+    })
+
+    it('does not leak session A subtitle state into an adopted session B', async () => {
+      let resolveLifecycleB
+      const lifecycleGateB = new Promise((resolve) => { resolveLifecycleB = resolve })
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+              transcriptDeliveryUnavailable: true,
+            })
+          }
+          if (statusReads === 2) return lifecycleGateB
+          // Authoritative reads still see A: the B notification has no fresh state.
+          return Promise.resolve({
+            status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+            transcriptDeliveryUnavailable: true,
+          })
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+
+      // A lifecycle read adopting B starts.
+      runtimeListener({ action: 'LIVE_DUBBING_TERMINAL_OUTCOME', data: {} }, authorizedSender)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(2)
+
+      // A B notification bumps the presentation generation, but its refresh
+      // finds no B state authoritatively — A's record is kept, B gains none.
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-B' } }, authorizedSender)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(3)
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+
+      // The fenced lifecycle read adopts B; A's value must not leak into B.
+      resolveLifecycleB({
+        status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: false,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      expect(wrapper.text()).toContain('Running')
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').exists()).toBe(true)
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)).toBeUndefined()
+    })
+
+    it('lets a pending B refresh apply after lifecycle adopts B', async () => {
+      let resolveLifecycleB
+      const lifecycleGateB = new Promise((resolve) => { resolveLifecycleB = resolve })
+      let resolveRefreshB
+      const refreshGateB = new Promise((resolve) => { resolveRefreshB = resolve })
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+              transcriptDeliveryUnavailable: false,
+            })
+          }
+          if (statusReads === 2) return lifecycleGateB
+          return refreshGateB
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+
+      // A lifecycle read for B starts while UI owns A.
+      runtimeListener({ action: 'LIVE_DUBBING_TERMINAL_OUTCOME', data: {} }, authorizedSender)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(2)
+
+      // A B notification starts refresh B, still pending.
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-B' } }, authorizedSender)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(3)
+
+      // The lifecycle read resolves first with a stale available flag:
+      // lifecycle adopts B while subtitles stay fenced.
+      resolveLifecycleB({
+        status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: false,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(wrapper.text()).toContain('Running')
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+
+      // Refresh B resolves late with unavailable: no longer discarded.
+      resolveRefreshB({
+        status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: true,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      expect(wrapper.text()).toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)?.exists()).toBe(true)
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').exists()).toBe(true)
+    })
+
+    it('rejects a pending A refresh after lifecycle adopts B', async () => {
+      let resolveRefreshA
+      const refreshGateA = new Promise((resolve) => { resolveRefreshA = resolve })
+      let statusReads = 0
+      sendMessage.mockImplementation(({ action }) => {
+        if (action === 'GET_LIVE_DUBBING_STATUS') {
+          statusReads += 1
+          if (statusReads === 1) {
+            return Promise.resolve({
+              status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+              transcriptDeliveryUnavailable: false,
+            })
+          }
+          if (statusReads === 2) return refreshGateA
+          return Promise.resolve({
+            status: { status: 'RUNNING', sessionId: 'session-B', providerId: 'gemini' },
+            transcriptDeliveryUnavailable: false,
+          })
+        }
+        return Promise.resolve({ status: 'idle' })
+      })
+      const wrapper = await mountAndFlush()
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+
+      // Refresh A starts while UI owns A and stays pending.
+      runtimeListener({ action: 'LIVE_DUBBING_TRANSCRIPT_DELIVERY_CHANGED', data: { sessionId: 'session-A' } }, authorizedSender)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(2)
+
+      // Lifecycle adopts B.
+      runtimeListener({ action: 'LIVE_DUBBING_TERMINAL_OUTCOME', data: {} }, authorizedSender)
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+      expect(statusReads).toBe(3)
+      expect(wrapper.text()).toContain('Running')
+
+      // The stale A refresh resolves late claiming unavailable: rejected.
+      resolveRefreshA({
+        status: { status: 'RUNNING', sessionId: 'session-A', providerId: 'gemini' },
+        transcriptDeliveryUnavailable: true,
+      })
+      await flushPromises(wrapper)
+      await flushPromises(wrapper)
+
+      expect(wrapper.text()).not.toContain('Subtitles unavailable on this tab.')
+      expect(subtitlesNote(wrapper)).toBeUndefined()
+      expect(wrapper.vm.subtitlesUnavailableBySession.get('session-B')).toBe(false)
+      expect(wrapper.find('button[aria-label="Stop live dubbing"]').exists()).toBe(true)
+    })
+  })
 })

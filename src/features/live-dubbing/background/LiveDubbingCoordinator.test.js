@@ -4492,6 +4492,7 @@ describe('LiveDubbingCoordinator', () => {
       success: true,
       available: true,
       status: null,
+      transcriptDeliveryUnavailable: false,
       terminalOutcome: {
         providerId: 'gemini',
         error: 'GEMINI_LIVE_REMOTE_ERROR',
@@ -4650,6 +4651,7 @@ describe('LiveDubbingCoordinator', () => {
       success: true,
       available: true,
       status: null,
+      transcriptDeliveryUnavailable: false,
       terminalOutcome: null,
     });
     expect(harness.storage.has(LIVE_DUBBING_STORAGE_KEY)).toBe(false);
@@ -7880,7 +7882,7 @@ describe('LiveDubbingCoordinator', () => {
 
   it('authorizes and relays only the current translated transcript to the top frame', async () => {
     const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
-    const sendTabMessage = vi.fn(async () => undefined);
+    const sendTabMessage = vi.fn(async () => ({ success: true, accepted: true }));
     harness.browserAPI.tabs.sendMessage = sendTabMessage;
     const sender = {
       id: 'extension-id',
@@ -7941,7 +7943,7 @@ describe('LiveDubbingCoordinator', () => {
     const harness = createVolumeHarness(LIVE_DUBBING_STATUS.CONNECTING_PROVIDER, {
       eventSequence: 4,
     });
-    const sendTabMessage = vi.fn(async () => undefined);
+    const sendTabMessage = vi.fn(async () => ({ success: true, accepted: true }));
     harness.browserAPI.tabs.sendMessage = sendTabMessage;
     const sender = {
       id: 'extension-id',
@@ -7994,6 +7996,512 @@ describe('LiveDubbingCoordinator', () => {
       id: 'extension-id',
       url: 'chrome-extension://extension-id/src/html/offscreen.html',
     })).resolves.toEqual({ success: true });
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: true,
+    });
+  });
+
+  it('flags transcript delivery unavailable on tab failure without leaking error details', async () => {
+    const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
+    harness.browserAPI.tabs.sendMessage = vi.fn()
+      .mockRejectedValue(new Error('tab closed https://secret.test'));
+    const sender = {
+      id: 'extension-id',
+      url: 'chrome-extension://extension-id/src/html/offscreen.html',
+    };
+    const message = {
+      action: LIVE_DUBBING_ACTIONS.TRANSLATED_TRANSCRIPT,
+      data: {
+        sessionId: 'session-1',
+        providerId: 'gemini',
+        eventSequence: 4,
+        transcriptSequence: 1,
+        transcript: { kind: 'translated', text: 'bonjour' },
+      },
+    };
+
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(message, sender))
+      .resolves.toEqual({ success: true });
+
+    const status = await harness.coordinator.getStatus();
+    expect(status.status.status).toBe(LIVE_DUBBING_STATUS.RUNNING);
+    expect(status.transcriptDeliveryUnavailable).toBe(true);
+    const serialized = JSON.stringify(status);
+    expect(serialized).not.toContain('tab closed');
+    expect(serialized).not.toContain('secret.test');
+
+    const notifyCalls = harness.browserAPI.runtime.sendMessage.mock.calls
+      .map(([sent]) => sent)
+      .filter(sent => sent?.action === LIVE_DUBBING_ACTIONS.TRANSCRIPT_DELIVERY_CHANGED);
+    expect(notifyCalls).toHaveLength(1);
+    expect(notifyCalls[0]).toEqual({
+      action: LIVE_DUBBING_ACTIONS.TRANSCRIPT_DELIVERY_CHANGED,
+      data: { sessionId: 'session-1' },
+    });
+    expect(JSON.stringify(notifyCalls)).not.toContain('tab closed');
+    expect(JSON.stringify(notifyCalls)).not.toContain('secret.test');
+  });
+
+  it('notifies transcript delivery state only once across consecutive failures', async () => {
+    const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
+    harness.browserAPI.tabs.sendMessage = vi.fn()
+      .mockRejectedValue(new Error('tab closed https://secret.test'));
+    const sender = {
+      id: 'extension-id',
+      url: 'chrome-extension://extension-id/src/html/offscreen.html',
+    };
+    const messageFor = transcriptSequence => ({
+      action: LIVE_DUBBING_ACTIONS.TRANSLATED_TRANSCRIPT,
+      data: {
+        sessionId: 'session-1',
+        providerId: 'gemini',
+        eventSequence: 4,
+        transcriptSequence,
+        transcript: { kind: 'translated', text: 'bonjour' },
+      },
+    });
+    const deliveryNotifies = () => harness.browserAPI.runtime.sendMessage.mock.calls
+      .map(([sent]) => sent)
+      .filter(sent => sent?.action === LIVE_DUBBING_ACTIONS.TRANSCRIPT_DELIVERY_CHANGED);
+
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(1), sender))
+      .resolves.toEqual({ success: true });
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(2), sender))
+      .resolves.toEqual({ success: true });
+
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: true,
+    });
+    expect(deliveryNotifies()).toHaveLength(1);
+  });
+
+  it('clears transcript delivery unavailability on later successful delivery', async () => {
+    const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
+    const sendTabMessage = vi.fn()
+      .mockRejectedValueOnce(new Error('tab closed https://secret.test'))
+      .mockResolvedValue({ success: true, accepted: true });
+    harness.browserAPI.tabs.sendMessage = sendTabMessage;
+    const sender = {
+      id: 'extension-id',
+      url: 'chrome-extension://extension-id/src/html/offscreen.html',
+    };
+    const messageFor = transcriptSequence => ({
+      action: LIVE_DUBBING_ACTIONS.TRANSLATED_TRANSCRIPT,
+      data: {
+        sessionId: 'session-1',
+        providerId: 'gemini',
+        eventSequence: 4,
+        transcriptSequence,
+        transcript: { kind: 'translated', text: 'bonjour' },
+      },
+    });
+    const deliveryNotifies = () => harness.browserAPI.runtime.sendMessage.mock.calls
+      .map(([sent]) => sent)
+      .filter(sent => sent?.action === LIVE_DUBBING_ACTIONS.TRANSCRIPT_DELIVERY_CHANGED);
+
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(1), sender))
+      .resolves.toEqual({ success: true });
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      transcriptDeliveryUnavailable: true,
+    });
+
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(2), sender))
+      .resolves.toEqual({ success: true });
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: false,
+    });
+    expect(deliveryNotifies()).toHaveLength(2);
+  });
+
+  it('marks transcript delivery unavailable when content rejects the latest transcript', async () => {
+    const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
+    harness.browserAPI.tabs.sendMessage = vi.fn(async () => ({ success: true, accepted: false }));
+    const sender = {
+      id: 'extension-id',
+      url: 'chrome-extension://extension-id/src/html/offscreen.html',
+    };
+    const message = {
+      action: LIVE_DUBBING_ACTIONS.TRANSLATED_TRANSCRIPT,
+      data: {
+        sessionId: 'session-1',
+        providerId: 'gemini',
+        eventSequence: 4,
+        transcriptSequence: 1,
+        transcript: { kind: 'translated', text: 'bonjour' },
+      },
+    };
+
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(message, sender))
+      .resolves.toEqual({ success: true });
+
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: true,
+    });
+    const notifyCalls = harness.browserAPI.runtime.sendMessage.mock.calls
+      .map(([sent]) => sent)
+      .filter(sent => sent?.action === LIVE_DUBBING_ACTIONS.TRANSCRIPT_DELIVERY_CHANGED);
+    expect(notifyCalls).toHaveLength(1);
+    expect(notifyCalls[0]).toEqual({
+      action: LIVE_DUBBING_ACTIONS.TRANSCRIPT_DELIVERY_CHANGED,
+      data: { sessionId: 'session-1' },
+    });
+  });
+
+  it('does not clear unavailable delivery on a later content rejection', async () => {
+    const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
+    harness.browserAPI.tabs.sendMessage = vi.fn(async (...args) => {
+      if (args[1]?.data?.transcriptSequence === 1) {
+        return Promise.reject(new Error('tab closed https://secret.test'));
+      }
+      return { success: true, accepted: false };
+    });
+    const sender = {
+      id: 'extension-id',
+      url: 'chrome-extension://extension-id/src/html/offscreen.html',
+    };
+    const messageFor = transcriptSequence => ({
+      action: LIVE_DUBBING_ACTIONS.TRANSLATED_TRANSCRIPT,
+      data: {
+        sessionId: 'session-1',
+        providerId: 'gemini',
+        eventSequence: 4,
+        transcriptSequence,
+        transcript: { kind: 'translated', text: 'bonjour' },
+      },
+    });
+    const deliveryNotifies = () => harness.browserAPI.runtime.sendMessage.mock.calls
+      .map(([sent]) => sent)
+      .filter(sent => sent?.action === LIVE_DUBBING_ACTIONS.TRANSCRIPT_DELIVERY_CHANGED);
+
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(1), sender))
+      .resolves.toEqual({ success: true });
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      transcriptDeliveryUnavailable: true,
+    });
+    expect(deliveryNotifies()).toHaveLength(1);
+
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(2), sender))
+      .resolves.toEqual({ success: true });
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: true,
+    });
+    expect(deliveryNotifies()).toHaveLength(1);
+    expect(JSON.stringify(await harness.coordinator.getStatus())).not.toContain('secret.test');
+  });
+
+  it('clears unavailable delivery on a later accepted transcript after a rejection', async () => {
+    const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
+    harness.browserAPI.tabs.sendMessage = vi.fn(async (...args) => {
+      if (args[1]?.data?.transcriptSequence === 1) return { success: true, accepted: false };
+      return { success: true, accepted: true };
+    });
+    const sender = {
+      id: 'extension-id',
+      url: 'chrome-extension://extension-id/src/html/offscreen.html',
+    };
+    const messageFor = transcriptSequence => ({
+      action: LIVE_DUBBING_ACTIONS.TRANSLATED_TRANSCRIPT,
+      data: {
+        sessionId: 'session-1',
+        providerId: 'gemini',
+        eventSequence: 4,
+        transcriptSequence,
+        transcript: { kind: 'translated', text: 'bonjour' },
+      },
+    });
+    const deliveryNotifies = () => harness.browserAPI.runtime.sendMessage.mock.calls
+      .map(([sent]) => sent)
+      .filter(sent => sent?.action === LIVE_DUBBING_ACTIONS.TRANSCRIPT_DELIVERY_CHANGED);
+
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(1), sender))
+      .resolves.toEqual({ success: true });
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      transcriptDeliveryUnavailable: true,
+    });
+    expect(deliveryNotifies()).toHaveLength(1);
+
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(2), sender))
+      .resolves.toEqual({ success: true });
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: false,
+    });
+    expect(deliveryNotifies()).toHaveLength(2);
+  });
+
+  it('ignores stale content acknowledgments that settle after a newer transcript', async () => {
+    const sender = {
+      id: 'extension-id',
+      url: 'chrome-extension://extension-id/src/html/offscreen.html',
+    };
+    const messageFor = transcriptSequence => ({
+      action: LIVE_DUBBING_ACTIONS.TRANSLATED_TRANSCRIPT,
+      data: {
+        sessionId: 'session-1',
+        providerId: 'gemini',
+        eventSequence: 4,
+        transcriptSequence,
+        transcript: { kind: 'translated', text: 'bonjour' },
+      },
+    });
+    const deliveryNotifies = harness => harness.browserAPI.runtime.sendMessage.mock.calls
+      .map(([sent]) => sent)
+      .filter(sent => sent?.action === LIVE_DUBBING_ACTIONS.TRANSCRIPT_DELIVERY_CHANGED);
+
+    // Stale rejection settling after a newer acceptance must not flag delivery.
+    {
+      const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
+      let resolveSeq1;
+      const seq1Gate = new Promise(resolve => { resolveSeq1 = resolve; });
+      harness.browserAPI.tabs.sendMessage = vi.fn(async (...args) => {
+        if (args[1]?.data?.transcriptSequence === 1) return seq1Gate;
+        return { success: true, accepted: true };
+      });
+
+      const pendingSeq1 = harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(1), sender);
+      await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(2), sender))
+        .resolves.toEqual({ success: true });
+      await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+        transcriptDeliveryUnavailable: false,
+      });
+
+      resolveSeq1({ success: true, accepted: false });
+      await expect(pendingSeq1).resolves.toEqual({ success: true });
+      await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+        success: true,
+        transcriptDeliveryUnavailable: false,
+      });
+      expect(deliveryNotifies(harness)).toHaveLength(0);
+    }
+
+    // Stale acceptance settling after a newer rejection must not clear delivery.
+    {
+      const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
+      let resolveSeq2;
+      const seq2Gate = new Promise(resolve => { resolveSeq2 = resolve; });
+      harness.browserAPI.tabs.sendMessage = vi.fn(async (...args) => {
+        const seq = args[1]?.data?.transcriptSequence;
+        if (seq === 2) return seq2Gate;
+        return { success: true, accepted: false };
+      });
+
+      await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(1), sender))
+        .resolves.toEqual({ success: true });
+      await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+        transcriptDeliveryUnavailable: true,
+      });
+      expect(deliveryNotifies(harness)).toHaveLength(1);
+
+      const pendingSeq2 = harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(2), sender);
+      await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(3), sender))
+        .resolves.toEqual({ success: true });
+      await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+        transcriptDeliveryUnavailable: true,
+      });
+      expect(deliveryNotifies(harness)).toHaveLength(1);
+
+      resolveSeq2({ success: true, accepted: true });
+      await expect(pendingSeq2).resolves.toEqual({ success: true });
+      await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+        success: true,
+        transcriptDeliveryUnavailable: true,
+      });
+      expect(deliveryNotifies(harness)).toHaveLength(1);
+    }
+  });
+
+  it('scopes transcript delivery unavailability to the failing session', async () => {
+    const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
+    harness.browserAPI.tabs.sendMessage = vi.fn()
+      .mockRejectedValue(new Error('tab closed https://secret.test'));
+    const sender = {
+      id: 'extension-id',
+      url: 'chrome-extension://extension-id/src/html/offscreen.html',
+    };
+    const sessionMessage = {
+      action: LIVE_DUBBING_ACTIONS.TRANSLATED_TRANSCRIPT,
+      data: {
+        sessionId: 'session-1',
+        providerId: 'gemini',
+        eventSequence: 4,
+        transcriptSequence: 1,
+        transcript: { kind: 'translated', text: 'bonjour' },
+      },
+    };
+
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(sessionMessage, sender))
+      .resolves.toEqual({ success: true });
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      transcriptDeliveryUnavailable: true,
+    });
+
+    harness.storage.set(LIVE_DUBBING_STORAGE_KEY, {
+      providerId: 'gemini',
+      sessionId: 'session-2',
+      tabId: 42,
+      targetLanguage: 'en',
+      status: LIVE_DUBBING_STATUS.RUNNING,
+      startedAt: 123,
+      lastError: null,
+      eventSequence: 7,
+    });
+    await harness.coordinator._readDescriptor();
+
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: false,
+    });
+
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(sessionMessage, sender))
+      .resolves.toMatchObject({ success: false, error: 'LIVE_DUBBING_UNAUTHORIZED', ignored: true });
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: false,
+    });
+  });
+
+  it('keeps transcript delivery available on successful tab delivery', async () => {
+    const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
+    const sendTabMessage = vi.fn(async () => ({ success: true, accepted: true }));
+    harness.browserAPI.tabs.sendMessage = sendTabMessage;
+    const sender = {
+      id: 'extension-id',
+      url: 'chrome-extension://extension-id/src/html/offscreen.html',
+    };
+    const message = {
+      action: LIVE_DUBBING_ACTIONS.TRANSLATED_TRANSCRIPT,
+      data: {
+        sessionId: 'session-1',
+        providerId: 'gemini',
+        eventSequence: 4,
+        transcriptSequence: 1,
+        transcript: { kind: 'translated', text: 'bonjour' },
+      },
+    };
+
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(message, sender))
+      .resolves.toEqual({ success: true });
+    expect(sendTabMessage).toHaveBeenCalledWith(42, {
+      action: LIVE_DUBBING_ACTIONS.TRANSCRIPT,
+      data: {
+        ...message.data,
+        eventSequence: 4,
+      },
+    }, { frameId: 0 });
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: false,
+    });
+    expect(harness.browserAPI.runtime.sendMessage.mock.calls
+      .map(([sent]) => sent)
+      .filter(sent => sent?.action === LIVE_DUBBING_ACTIONS.TRANSCRIPT_DELIVERY_CHANGED))
+      .toHaveLength(0);
+  });
+
+  it('ignores a stale same-session failure when a newer transcript already succeeded', async () => {
+    const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
+    let rejectSeq1;
+    const seq1Gate = new Promise((_, reject) => { rejectSeq1 = reject; });
+    harness.browserAPI.tabs.sendMessage = vi.fn(async (...args) => {
+      if (args[1]?.data?.transcriptSequence === 1) return seq1Gate;
+      return { success: true, accepted: true };
+    });
+    const sender = {
+      id: 'extension-id',
+      url: 'chrome-extension://extension-id/src/html/offscreen.html',
+    };
+    const messageFor = transcriptSequence => ({
+      action: LIVE_DUBBING_ACTIONS.TRANSLATED_TRANSCRIPT,
+      data: {
+        sessionId: 'session-1',
+        providerId: 'gemini',
+        eventSequence: 4,
+        transcriptSequence,
+        transcript: { kind: 'translated', text: 'bonjour' },
+      },
+    });
+    const deliveryNotifies = () => harness.browserAPI.runtime.sendMessage.mock.calls
+      .map(([sent]) => sent)
+      .filter(sent => sent?.action === LIVE_DUBBING_ACTIONS.TRANSCRIPT_DELIVERY_CHANGED);
+
+    const pendingSeq1 = harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(1), sender);
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(2), sender))
+      .resolves.toEqual({ success: true });
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: false,
+    });
+
+    rejectSeq1(new Error('tab closed https://secret.test'));
+    await expect(pendingSeq1).resolves.toEqual({ success: true });
+
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: false,
+    });
+    expect(deliveryNotifies()).toHaveLength(0);
+    expect(JSON.stringify(await harness.coordinator.getStatus())).not.toContain('secret.test');
+  });
+
+  it('does not let a stale pending failure restore unavailability after recovery', async () => {
+    const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
+    let rejectSeq2;
+    const seq2Gate = new Promise((_, reject) => { rejectSeq2 = reject; });
+    harness.browserAPI.tabs.sendMessage = vi.fn(async (...args) => {
+      const seq = args[1]?.data?.transcriptSequence;
+      if (seq === 1) return Promise.reject(new Error('tab closed https://secret.test'));
+      if (seq === 2) return seq2Gate;
+      return { success: true, accepted: true };
+    });
+    const sender = {
+      id: 'extension-id',
+      url: 'chrome-extension://extension-id/src/html/offscreen.html',
+    };
+    const messageFor = transcriptSequence => ({
+      action: LIVE_DUBBING_ACTIONS.TRANSLATED_TRANSCRIPT,
+      data: {
+        sessionId: 'session-1',
+        providerId: 'gemini',
+        eventSequence: 4,
+        transcriptSequence,
+        transcript: { kind: 'translated', text: 'bonjour' },
+      },
+    });
+    const deliveryNotifies = () => harness.browserAPI.runtime.sendMessage.mock.calls
+      .map(([sent]) => sent)
+      .filter(sent => sent?.action === LIVE_DUBBING_ACTIONS.TRANSCRIPT_DELIVERY_CHANGED);
+
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(1), sender))
+      .resolves.toEqual({ success: true });
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: true,
+    });
+    expect(deliveryNotifies()).toHaveLength(1);
+
+    const pendingSeq2 = harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(2), sender);
+    await expect(harness.coordinator.handleOffscreenTranslatedTranscript(messageFor(3), sender))
+      .resolves.toEqual({ success: true });
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: false,
+    });
+    expect(deliveryNotifies()).toHaveLength(2);
+
+    rejectSeq2(new Error('tab closed https://secret.test'));
+    await expect(pendingSeq2).resolves.toEqual({ success: true });
+
+    await expect(harness.coordinator.getStatus()).resolves.toMatchObject({
+      success: true,
+      transcriptDeliveryUnavailable: false,
+    });
+    expect(deliveryNotifies()).toHaveLength(2);
+    expect(JSON.stringify(await harness.coordinator.getStatus())).not.toContain('secret.test');
   });
 
   it('rejects duplicate transcript sequences for the exact active descriptor', async () => {
@@ -8039,7 +8547,7 @@ describe('LiveDubbingCoordinator', () => {
   it('keeps transcript relay bookkeeping out of restart lifecycle state and preserves STOP lease recovery', async () => {
     const harness = createVolumeHarness(LIVE_DUBBING_STATUS.RUNNING);
     harness.manager.activeLeases = [{ owner: LIVE_DUBBING_OWNER, leaseId: 'session-1' }];
-    harness.browserAPI.tabs.sendMessage = vi.fn(async () => undefined);
+    harness.browserAPI.tabs.sendMessage = vi.fn(async () => ({ success: true, accepted: true }));
     const sender = {
       id: 'extension-id',
       url: 'chrome-extension://extension-id/src/html/offscreen.html',
