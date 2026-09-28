@@ -8,12 +8,14 @@ import { SelectionTranslationMode, CONFIG, TranslationMode } from '@/shared/conf
 import { PROMPT_REGISTRY } from '@/shared/config/PromptRegistry.js';
 import { getPersistedDefaultSettings } from '@/shared/config/settingsDefaults.js';
 import { runSettingsMigrations } from '@/shared/config/settingsMigrations.js';
+import ExtensionContextManager from '@/core/extensionContext.js';
 
 // Mock Dependencies
 vi.mock('@/shared/storage/core/StorageCore.js', () => ({
   storageManager: {
     get: vi.fn().mockResolvedValue({}),
     set: vi.fn().mockResolvedValue(true),
+    remove: vi.fn().mockResolvedValue(true),
     clear: vi.fn().mockResolvedValue(true),
     on: vi.fn(),
     off: vi.fn()
@@ -504,6 +506,7 @@ describe('Settings Store', () => {
 
       expect(store.settings.THEME).toBe('dark');
       expect(storageManager.set).toHaveBeenCalled();
+      expect(storageManager.remove).not.toHaveBeenCalled();
     });
 
     it('importSettings should remove obsolete endpoint overrides returned by migrations', async () => {
@@ -523,6 +526,60 @@ describe('Settings Store', () => {
 
       expect(store.settings).not.toHaveProperty('MICROSOFT_EDGE_AUTH_URL');
       expect(store.settings).not.toHaveProperty('MICROSOFT_EDGE_TRANSLATE_URL');
+    });
+
+    it('completes import when obsolete-key cleanup fails after settings are saved', async () => {
+      const cleanupError = new Error('storage cleanup failed');
+      runSettingsMigrations.mockResolvedValueOnce({
+        updates: {},
+        removals: ['LEGACY_SETTING'],
+        logs: []
+      });
+      storageManager.remove.mockRejectedValueOnce(cleanupError);
+      const store = useSettingsStore();
+
+      await expect(store.importSettings({ THEME: 'dark', _exported: true })).resolves.toBe(true);
+
+      expect(store.settings.THEME).toBe('dark');
+      expect(storageManager.set).toHaveBeenCalled();
+      expect(storageManager.remove).toHaveBeenCalledWith(['LEGACY_SETTING']);
+      expect(storageManager.on).toHaveBeenCalledWith('change', expect.any(Function));
+    });
+
+    it('keeps settings-save failures fatal during import', async () => {
+      const saveError = new Error('settings save failed');
+      storageManager.set.mockRejectedValueOnce(saveError);
+      runSettingsMigrations.mockResolvedValueOnce({
+        updates: {},
+        removals: ['LEGACY_SETTING'],
+        logs: []
+      });
+      const store = useSettingsStore();
+
+      await expect(store.importSettings({ THEME: 'dark', _exported: true })).rejects.toBe(saveError);
+
+      expect(storageManager.remove).not.toHaveBeenCalled();
+      expect(storageManager.on).toHaveBeenCalledWith('change', expect.any(Function));
+    });
+
+    it('propagates extension-context errors from obsolete-key cleanup', async () => {
+      const contextError = new Error('Extension context invalidated');
+      runSettingsMigrations.mockResolvedValueOnce({
+        updates: {},
+        removals: ['LEGACY_SETTING'],
+        logs: []
+      });
+      storageManager.remove.mockRejectedValueOnce(contextError);
+      ExtensionContextManager.isContextError.mockImplementation(error => error === contextError);
+      const store = useSettingsStore();
+
+      await expect(store.importSettings({ THEME: 'dark', _exported: true })).rejects.toBe(contextError);
+
+      expect(ExtensionContextManager.handleContextError).toHaveBeenCalledWith(
+        contextError,
+        'settings-store-import'
+      );
+      expect(storageManager.on).toHaveBeenCalledWith('change', expect.any(Function));
     });
 
     it('importSettings should pass legacy Mouse Hover triggers through centralized migration', async () => {
@@ -547,6 +604,78 @@ describe('Settings Store', () => {
         expect.objectContaining({ MOUSE_HOVER_TRIGGER: 'ctrl' })
       );
       expect(store.settings.MOUSE_HOVER_TRIGGER).toBe('primary');
+    });
+
+    it.each([
+      [true, {}, true, false],
+      [false, {}, false, false],
+      [true, {
+        LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI: false,
+        LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI: true
+      }, false, true],
+      [false, {
+        LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI: true,
+        LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI: true
+      }, true, true]
+    ])(
+      'importSettings migrates legacy Original transcript value %s while preserving explicit provider values',
+      async (legacyValue, providerValues, expectedGemini, expectedOpenAI) => {
+        const persistedSettings = {
+          LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT: legacyValue
+        };
+        storageManager.set.mockImplementationOnce(async (settings) => {
+          Object.assign(persistedSettings, settings);
+          return true;
+        });
+        storageManager.remove.mockImplementationOnce(async (keys) => {
+          keys.forEach(key => delete persistedSettings[key]);
+          return true;
+        });
+        secureStorage.processImportedSettings.mockResolvedValueOnce({
+          THEME: 'dark',
+          LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT: legacyValue,
+          ...providerValues
+        });
+        const { runSettingsMigrations: runRealSettingsMigrations } = await vi.importActual(
+          '@/shared/config/settingsMigrations.js'
+        );
+        runSettingsMigrations.mockImplementationOnce(runRealSettingsMigrations);
+        const store = useSettingsStore();
+
+        await store.importSettings({ THEME: 'dark', _exported: true });
+
+        expect(store.settings.LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI).toBe(expectedGemini);
+        expect(store.settings.LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI).toBe(expectedOpenAI);
+        expect(store.settings).not.toHaveProperty('LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT');
+        expect(storageManager.remove).toHaveBeenCalledWith([
+          'LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT'
+        ]);
+        expect(persistedSettings.LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT).toBeUndefined();
+        expect(persistedSettings.LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI).toBe(expectedGemini);
+        expect(persistedSettings.LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI).toBe(expectedOpenAI);
+      }
+    );
+
+    it('importSettings should keep merged default model lists available to model migrations', async () => {
+      secureStorage.processImportedSettings.mockResolvedValueOnce({
+        THEME: 'dark',
+        OPENAI_API_MODEL: 'gpt-5.6-luna'
+      });
+      const { runSettingsMigrations: runRealSettingsMigrations } = await vi.importActual(
+        '@/shared/config/settingsMigrations.js'
+      );
+      let migrationInput;
+      runSettingsMigrations.mockImplementationOnce(async (settings, explicitSettingsKeys) => {
+        migrationInput = { ...settings };
+        return runRealSettingsMigrations(settings, explicitSettingsKeys);
+      });
+      const store = useSettingsStore();
+
+      await store.importSettings({ THEME: 'dark', _exported: true });
+
+      expect(migrationInput.OPENAI_MODELS).toEqual(CONFIG.OPENAI_MODELS);
+      expect(store.settings.OPENAI_API_MODEL).toBe('gpt-6-luna');
+      expect(storageManager.remove).not.toHaveBeenCalled();
     });
 
     it('importSettings should drop non-editable wrappers from old backups and keep editable prompts', async () => {

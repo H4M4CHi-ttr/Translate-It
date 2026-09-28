@@ -111,7 +111,8 @@ const makeStore = (settings = {}) => {
       API_KEY: '',
        TRANSLATION_API: 'google',
        LIVE_DUBBING_SHOW_TRANSLATED_TRANSCRIPT: false,
-        LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT: false,
+         LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI: false,
+         LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI: false,
         LIVE_DUBBING_SUBTITLE_SIZE: 'medium',
         ...settings
     }),
@@ -168,7 +169,8 @@ const mountView = (props = {}) => mount(LiveDubbingView, {
 })
 
 const providerSelect = (wrapper) => wrapper.find('#live-dubbing-provider-select')
-const transcriptHeader = (wrapper) => wrapper.find('.live-dubbing-transcript-preferences-header')
+const transcriptHeader = (wrapper) => wrapper.find('.live-dubbing-transcript-preferences-toggle')
+const transcriptHeaderRow = (wrapper) => wrapper.find('.live-dubbing-transcript-preferences-header')
 const transcriptContent = (wrapper) => wrapper.find('#live-dubbing-transcript-preferences-content')
 
 describe('LiveDubbingView', () => {
@@ -193,8 +195,8 @@ describe('LiveDubbingView', () => {
        live_dubbing_config_label: 'Configuration',
       live_dubbing_transcript_preferences_label: 'Subtitle preferences',
         live_dubbing_change_font_label: 'Change font',
-       live_dubbing_show_translated_transcript: 'Translated subtitles',
-       live_dubbing_show_original_transcript: 'Original subtitles',
+       live_dubbing_show_translated_transcript: 'Dubbed',
+       live_dubbing_show_original_transcript: 'Original',
        live_dubbing_subtitle_size_label: 'Subtitle size',
        live_dubbing_subtitle_size_small: 'Small',
        live_dubbing_subtitle_size_medium: 'Medium',
@@ -266,17 +268,48 @@ describe('LiveDubbingView', () => {
     expect(wrapper.find('label[for="live-dubbing-provider-select"]').element.tagName).toBe('LABEL')
   })
 
-  it('renders the localized Change font action in the Subtitles card', () => {
+  it('keeps Change font hidden and non-focusable while the Subtitles card is collapsed', () => {
     harness.i18n.live_dubbing_change_font_label = 'Change font locally'
     const wrapper = mountView()
 
     const link = wrapper.find('.live-dubbing-change-font-link')
     expect(link.exists()).toBe(true)
+    expect(link.attributes('style')).toContain('display: none')
+    expect(link.element.matches(':focus')).toBe(false)
     expect(link.text()).toBe('Change font locally')
+    const header = transcriptHeaderRow(wrapper)
+    expect(header.element.contains(link.element)).toBe(true)
+    expect(link.element.compareDocumentPosition(header.find('.live-dubbing-transcript-preferences-chevron').element)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(transcriptHeader(wrapper).attributes('aria-expanded')).toBe('false')
     expect(harness.tCalls).toContainEqual([
       'live_dubbing_change_font_label',
       'Change font'
     ])
+  })
+
+  it('renders compact subtitle controls in order with an accessible size select', () => {
+    const wrapper = mountView()
+    const row = wrapper.find('.live-dubbing-transcript-preferences-list')
+    const items = row.findAll('.live-dubbing-transcript-preference')
+    const sizeSelect = wrapper.find('#live-dubbing-subtitle-size-select')
+
+    expect(items).toHaveLength(3)
+    expect(items[0].text()).toBe('Dubbed')
+    expect(items[0].findComponent({ name: 'BaseToggle' }).exists()).toBe(true)
+    expect(items[1].text()).toBe('Original')
+    expect(items[1].classes()).not.toContain('live-dubbing-transcript-preference--size')
+    expect(items[1].findComponent({ name: 'BaseToggle' }).exists()).toBe(true)
+    expect(items[2].element.contains(sizeSelect.element)).toBe(true)
+    expect(items[2].classes()).toContain('live-dubbing-transcript-preference--size')
+    expect(sizeSelect.attributes('aria-label')).toBe('Subtitle size')
+    expect(row.element.compareDocumentPosition(sizeSelect.element)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    const scss = readFileSync(resolve(here, 'LiveDubbingView.scss'), 'utf8')
+    expect(scss).toMatch(/\.live-dubbing-transcript-preferences-list\s*\{[^}]*flex-flow:\s*row\s+wrap/)
+    expect(scss).toMatch(/\.live-dubbing-change-font-enter-from[\s\S]*?opacity:\s*0/)
+    expect(scss).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.live-dubbing-change-font-leave-active[\s\S]*?transition:\s*none/)
   })
 
   it('starts the Subtitles card collapsed when both subtitle preferences are off', () => {
@@ -289,36 +322,53 @@ describe('LiveDubbingView', () => {
     expect(transcriptContent(wrapper).exists()).toBe(true)
     expect(transcriptContent(wrapper).attributes('inert')).toBe('')
     expect(wrapper.findAllComponents({ name: 'BaseToggle' })).toHaveLength(2)
-    expect(wrapper.find('.live-dubbing-change-font-link').exists()).toBe(true)
+    expect(wrapper.find('.live-dubbing-change-font-link').attributes('style')).toContain('display: none')
   })
 
-  it('keeps the full-width disclosure as one semantic button with no nested controls', () => {
+  it('keeps a large title disclosure control and independent Change font button', () => {
     const wrapper = mountView()
     const header = transcriptHeader(wrapper)
 
-    expect(wrapper.findAll('button.live-dubbing-transcript-preferences-header')).toHaveLength(1)
+    expect(wrapper.findAll('button.live-dubbing-transcript-preferences-toggle')).toHaveLength(1)
     expect(header.attributes('type')).toBe('button')
     expect(header.element.tabIndex).toBe(0)
-    expect(header.find('.live-dubbing-card-title').exists()).toBe(true)
-    expect(header.find('.live-dubbing-transcript-preferences-chevron').exists()).toBe(true)
+    expect(header.attributes('aria-expanded')).toBe('false')
+    expect(header.attributes('aria-controls')).toBe('live-dubbing-transcript-preferences-content')
+    expect(header.find('.live-dubbing-card-title').text()).toBe('Subtitle preferences')
     expect(header.findAll('button, a, input, select, textarea, [tabindex]:not([tabindex="-1"])'))
       .toHaveLength(0)
+    expect(transcriptHeaderRow(wrapper).findAll('button')).toHaveLength(2)
+    expect(transcriptHeaderRow(wrapper).find('.live-dubbing-change-font-link').exists()).toBe(true)
 
     const source = readFileSync(resolve(here, 'LiveDubbingView.vue'), 'utf8')
-    const headerTemplate = source.match(/<button\s+type="button"\s+class="live-dubbing-transcript-preferences-header"[\s\S]*?<\/button>/)?.[0]
-    expect(headerTemplate).toBeTruthy()
-    expect(headerTemplate).not.toMatch(/@key(?:down|up|press)/)
-    expect(header.attributes('onkeydown')).toBeUndefined()
+    const toggleTemplate = source.match(/<button\s+type="button"\s+class="live-dubbing-transcript-preferences-toggle"[\s\S]*?<\/button>/)?.[0]
+    expect(toggleTemplate).toBeTruthy()
+    expect(toggleTemplate).not.toMatch(/<button\s[\s\S]+<button\s|<a\s/)
   })
 
-  it('toggles once from title and chevron clicks, but not from content clicks', async () => {
+  it('shows Change font when expanded without coupling its click to disclosure', async () => {
+    const wrapper = mountView()
+    const disclosure = transcriptHeader(wrapper)
+    const changeFont = wrapper.find('.live-dubbing-change-font-link')
+
+    await disclosure.trigger('click')
+    expect(disclosure.attributes('aria-expanded')).toBe('true')
+    expect(changeFont.attributes('style')).not.toContain('display: none')
+    expect(changeFont.element.matches(':enabled')).toBe(true)
+
+    await changeFont.trigger('click')
+
+    expect(disclosure.attributes('aria-expanded')).toBe('true')
+  })
+
+  it('toggles from the title disclosure control but not from content clicks', async () => {
     const wrapper = mountView()
     const header = transcriptHeader(wrapper)
 
-    await header.find('.live-dubbing-card-title').trigger('click')
+    await header.trigger('click')
     expect(header.attributes('aria-expanded')).toBe('true')
 
-    await header.find('.live-dubbing-transcript-preferences-chevron').trigger('click')
+    await header.trigger('click')
     expect(header.attributes('aria-expanded')).toBe('false')
 
     await transcriptContent(wrapper).trigger('click')
@@ -326,14 +376,26 @@ describe('LiveDubbingView', () => {
   })
 
   it.each([
-    ['translated', { LIVE_DUBBING_SHOW_TRANSLATED_TRANSCRIPT: true }],
-    ['original', { LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT: true }]
-  ])('starts the Subtitles card expanded when %s subtitles are enabled', (_label, settings) => {
+    ['Dubbed', 'gemini', { LIVE_DUBBING_SHOW_TRANSLATED_TRANSCRIPT: true }, true],
+    ['Gemini Original', 'gemini', { LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI: true }, true],
+    ['OpenAI Original', 'openai', { LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI: true }, true],
+    ['OpenAI Original while Gemini is selected', 'gemini', { LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI: true }, false],
+    ['Gemini Original while OpenAI is selected', 'openai', { LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI: true }, false]
+  ])('initially expands for %s only when it applies to the selected provider', (_label, providerId, settings, expanded) => {
     harness.store = makeStore(settings)
+    const wrapper = mountView({ providerId })
+
+    expect(transcriptHeader(wrapper).attributes('aria-expanded')).toBe(String(expanded))
+    expect(transcriptContent(wrapper).attributes('inert') === undefined).toBe(expanded)
+  })
+
+  it('does not change the disclosure state when switching providers after mount', async () => {
+    harness.store = makeStore({ LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI: true })
     const wrapper = mountView()
 
-    expect(transcriptHeader(wrapper).attributes('aria-expanded')).toBe('true')
-    expect(transcriptContent(wrapper).attributes('inert')).toBeUndefined()
+    expect(transcriptHeader(wrapper).attributes('aria-expanded')).toBe('false')
+    await wrapper.setProps({ providerId: 'openai' })
+    expect(transcriptHeader(wrapper).attributes('aria-expanded')).toBe('false')
   })
 
   it('toggles the disclosure state without changing subtitle settings or remounting control', async () => {
@@ -386,7 +448,7 @@ describe('LiveDubbingView', () => {
 
     await transcriptHeader(wrapper).trigger('click')
     expect(content.style.height).toBe('0px')
-    frameCallbacks.shift()()
+    while (content.style.height === '0px' && frameCallbacks.length) frameCallbacks.shift()()
     expect(content.style.height).toBe('144px')
     vi.advanceTimersByTime(190)
     await nextTick()
@@ -395,7 +457,7 @@ describe('LiveDubbingView', () => {
 
     await transcriptHeader(wrapper).trigger('click')
     expect(content.style.height).toBe('144px')
-    frameCallbacks.shift()()
+    while (content.style.height !== '0px' && frameCallbacks.length) frameCallbacks.shift()()
     expect(content.style.height).toBe('0px')
     vi.advanceTimersByTime(190)
     await nextTick()
@@ -440,8 +502,7 @@ describe('LiveDubbingView', () => {
     const originalMatchMedia = window.matchMedia
     const matchMediaMock = vi.fn().mockReturnValue({ matches: true })
     window.matchMedia = matchMediaMock
-    const requestAnimationFrameMock = vi.spyOn(window, 'requestAnimationFrame')
-      .mockImplementation(() => 1)
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1)
     const wrapper = mountView()
     const content = transcriptContent(wrapper).element
     Object.defineProperty(content, 'scrollHeight', { configurable: true, value: 144 })
@@ -449,7 +510,8 @@ describe('LiveDubbingView', () => {
     await transcriptHeader(wrapper).trigger('click')
 
     expect(matchMediaMock).toHaveBeenCalledWith('(prefers-reduced-motion: reduce)')
-    expect(requestAnimationFrameMock).not.toHaveBeenCalled()
+    // Change font's independent fade may use a frame; the disclosure height
+    // transition itself must still complete synchronously under reduced motion.
     expect(content.style.height).toBe('')
     expect(content.style.transition).toBe('')
 
@@ -698,10 +760,97 @@ describe('LiveDubbingView', () => {
       1, 'LIVE_DUBBING_SHOW_TRANSLATED_TRANSCRIPT', true
     )
     expect(harness.store.updateSettingAndPersist).toHaveBeenNthCalledWith(
-      2, 'LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT', true
+      2, 'LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI', true
     )
     expect(harness.store.settings.LIVE_DUBBING_SHOW_TRANSLATED_TRANSCRIPT).toBe(true)
-    expect(harness.store.settings.LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT).toBe(true)
+    expect(harness.store.settings.LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI).toBe(true)
+  })
+
+  it('persists Gemini and OpenAI Original preferences independently', async () => {
+    const wrapper = mountView()
+    const original = () => wrapper.findAllComponents({ name: 'BaseToggle' })[1]
+
+    await original().vm.$emit('update:modelValue', true)
+    expect(harness.store.updateSettingAndPersist).toHaveBeenLastCalledWith(
+      'LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI', true
+    )
+    expect(harness.store.settings.LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI).toBe(false)
+
+    await wrapper.setProps({ providerId: 'openai' })
+    await original().vm.$emit('update:modelValue', true)
+    expect(harness.store.updateSettingAndPersist).toHaveBeenLastCalledWith(
+      'LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI', true
+    )
+    expect(harness.store.settings.LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI).toBe(true)
+  })
+
+  it('shows the selected provider Original value and restores it after switching back', async () => {
+    harness.store = makeStore({ LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI: true })
+    const wrapper = mountView()
+    const original = () => wrapper.findAllComponents({ name: 'BaseToggle' })[1]
+
+    expect(original().props('modelValue')).toBe(false)
+    await wrapper.setProps({ providerId: 'openai' })
+    expect(original().props('modelValue')).toBe(true)
+    await wrapper.setProps({ providerId: 'gemini' })
+    expect(original().props('modelValue')).toBe(false)
+    await wrapper.setProps({ providerId: 'openai' })
+    expect(original().props('modelValue')).toBe(true)
+  })
+
+  it('tracks and rolls back pending Original writes by provider key', async () => {
+    const deferred = makeDeferredWriteStore({ LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI: true })
+    harness.store = deferred.store
+    const wrapper = mountView()
+    const original = () => wrapper.findAllComponents({ name: 'BaseToggle' })[1]
+
+    await original().vm.$emit('update:modelValue', true)
+    expect(deferred.writes[0].key).toBe('LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI')
+    await wrapper.setProps({ providerId: 'openai' })
+    expect(original().props('modelValue')).toBe(true)
+    expect(original().props('disabled')).toBe(false)
+    await original().vm.$emit('update:modelValue', false)
+    expect(deferred.writes[1].key).toBe('LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI')
+
+    deferred.writes[1].reject(new Error('storage unavailable'))
+    await settle()
+    expect(deferred.store.settings.LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_OPENAI).toBe(true)
+    expect(original().props('modelValue')).toBe(true)
+    deferred.writes[0].resolve()
+    await settle()
+  })
+
+  it('shows an accessible hover and keyboard tooltip for OpenAI only', async () => {
+    const wrapper = mountView()
+    expect(wrapper.find('.live-dubbing-openai-original-info').exists()).toBe(false)
+
+    await wrapper.setProps({ providerId: 'openai' })
+    const note = wrapper.find('.live-dubbing-openai-original-info')
+    expect(note.exists()).toBe(true)
+    expect(note.attributes('role')).toBe('note')
+    expect(note.attributes('tabindex')).toBe('0')
+    expect(note.attributes('aria-label')).toBe('Uses additional transcription with OpenAI.')
+    expect(note.attributes('data-tooltip')).toBe('Uses additional transcription with OpenAI.')
+    await note.trigger('mouseenter')
+    await note.trigger('focus')
+
+    const scss = readFileSync(resolve(here, 'LiveDubbingView.scss'), 'utf8')
+    expect(scss).toMatch(/\.live-dubbing-openai-original-info:hover::after/)
+    expect(scss).toMatch(/\.live-dubbing-openai-original-info:focus-visible::after/)
+    expect(scss).toMatch(/content:\s*attr\(data-tooltip\)/)
+    const tooltipRule = scss.match(/\.live-dubbing-openai-original-info::after\s*\{[^}]*\}/)?.[0]
+    const controlsRowRule = scss.match(/\.live-dubbing-transcript-preferences-list\s*\{[^}]*\}/)?.[0]
+    const rtlTooltipRule = scss.match(/\.live-dubbing-view--rtl \.live-dubbing-openai-original-info::after\s*\{[^}]*\}/)?.[0]
+    expect(controlsRowRule).toMatch(/position:\s*relative/)
+    expect(tooltipRule).toMatch(/position:\s*absolute/)
+    expect(tooltipRule).toMatch(/inset-inline:\s*0/)
+    expect(tooltipRule).toMatch(/width:\s*100%/)
+    expect(tooltipRule).not.toMatch(/(?:left:\s*50%|translateX\(-50%\))/)
+    expect(rtlTooltipRule).toMatch(/direction:\s*rtl/)
+    expect(rtlTooltipRule).toMatch(/text-align:\s*start/)
+
+    await wrapper.setProps({ providerId: 'gemini' })
+    expect(wrapper.find('.live-dubbing-openai-original-info').exists()).toBe(false)
   })
 
   it('renders all subtitle size options independently of subtitle visibility and session state', async () => {
@@ -811,7 +960,7 @@ describe('LiveDubbingView', () => {
       1, 'LIVE_DUBBING_SHOW_TRANSLATED_TRANSCRIPT', true
     )
     expect(harness.store.updateSettingAndPersist).toHaveBeenNthCalledWith(
-      2, 'LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT', true
+      2, 'LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI', true
     )
   })
 
@@ -909,7 +1058,7 @@ describe('LiveDubbingView', () => {
     toggles[1].vm.$emit('update:modelValue', true)
     expect(deferred.writes).toHaveLength(2)
     expect(deferred.writes[1]).toMatchObject({
-      key: 'LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT',
+      key: 'LIVE_DUBBING_SHOW_ORIGINAL_TRANSCRIPT_GEMINI',
       value: true
     })
   })
@@ -1204,7 +1353,8 @@ describe('LiveDubbingView', () => {
 
     expect(scss).not.toMatch(/(?:padding|margin|inset)-(?:left|right)\s*:/)
     expect(scss).not.toMatch(/(?:text-align|border(?:-left|-right)?):\s*(?:left|right)/)
-    expect(scss).not.toMatch(/\b(?:left|right)\s*:\s*\d/)
+    expect(scss.replace(/\.live-dubbing-openai-original-info::after\s*\{[^}]*\}/, ''))
+      .not.toMatch(/\b(?:left|right)\s*:\s*\d/)
     // Feedback/source text aligns to the logical start edge.
     expect(scss).toMatch(/text-align:\s*start/)
     // Theme-aware tokens only — no hardcoded light/dark surfaces.
@@ -1222,18 +1372,15 @@ describe('LiveDubbingView', () => {
     const headerRule = scss.match(
       /\.live-dubbing-transcript-preferences-header\s*\{[\s\S]*?^\}/m
     )?.[0]
-    const expandedHeaderRule = headerRule?.match(/&\[aria-expanded="true"\]\s*\{[^}]*\}/)?.[0]
-    const headerHoverRule = headerRule?.match(/&:hover\s*\{[\s\S]*?\n[ \t]*\}/)?.[0]
+    const headerHoverRule = scss.match(/\.live-dubbing-transcript-preferences-toggle:hover\s*\{[^}]*\}/)?.[0]
     const headerFocusRule = scss.match(
-      /\.live-dubbing-transcript-preferences-header:focus-visible\s*\{[^}]*\}/m
+      /\.live-dubbing-transcript-preferences-toggle:focus-visible\s*\{[^}]*\}/m
     )?.[0]
     const titleRule = scss.match(/\.live-dubbing-card-title\s*\{[^}]*\}/m)?.[0]
     expect(headerRule).toMatch(/inline-size:\s*100%/)
     expect(headerRule).toMatch(/box-sizing:\s*border-box/)
-    expect(headerRule).toMatch(/cursor:\s*pointer/)
     expect(headerRule).toMatch(/padding-block:\s*8px/)
     expect(headerRule).toMatch(/padding-inline:\s*10px/)
-    expect(expandedHeaderRule).toMatch(/padding-block-end:\s*6px/)
     expect(headerRule).not.toMatch(/transition\s*:/)
     expect(headerRule).not.toMatch(/transform\s*:|box-shadow\s*:/)
     expect(headerHoverRule).toBeTruthy()
@@ -1244,16 +1391,14 @@ describe('LiveDubbingView', () => {
     expect(headerFocusRule).toBeTruthy()
     expect(headerFocusRule).toMatch(/outline:\s*2px\s+solid\s+var\(--color-primary\)/)
     expect(headerFocusRule).not.toMatch(/transform\s*:|box-shadow\s*:/)
-    expect(scss.match(/\.live-dubbing-transcript-preferences-header(?::hover)?\s*\{/g))
-      .toEqual(['.live-dubbing-transcript-preferences-header {'])
-    expect(scss.match(/\.live-dubbing-transcript-preferences-header:focus-visible\s*\{/g))
-      .toEqual(['.live-dubbing-transcript-preferences-header:focus-visible {'])
+    expect(scss.match(/\.live-dubbing-transcript-preferences-toggle(?::hover|:focus-visible)?\s*\{/g))
+      .toEqual(['.live-dubbing-transcript-preferences-toggle {', '.live-dubbing-transcript-preferences-toggle:hover {', '.live-dubbing-transcript-preferences-toggle:focus-visible {'])
     expect(scss).toMatch(/\.live-dubbing-transcript-preferences-chevron[\s\S]*?border-inline-end:/)
     expect(scss).toMatch(/\.live-dubbing-transcript-preferences-chevron[\s\S]*?border-block-end:/)
     expect(scss).toMatch(/\.live-dubbing-transcript-preferences-chevron\s*\{[^}]*border-(?:inline-end|block-end):\s*[^;]*currentColor/)
     expect(scss).toMatch(/\.live-dubbing-transcript-preferences-chevron[\s\S]*?transition:\s*transform\s+190ms\s+cubic-bezier\(0\.2,\s*0,\s*0,\s*1\)/)
-    expect(scss).toMatch(/\.live-dubbing-transcript-preferences-chevron\s*\{[^}]*margin-inline-start:\s*auto/)
-    expect(scss).toMatch(/aria-expanded="true"[\s\S]*?transform:\s*rotate\(225deg\)/)
+    expect(scss).toMatch(/\.live-dubbing-transcript-preferences-toggle\s*\{[^}]*min-inline-size:\s*44px/)
+    expect(scss).toMatch(/\.live-dubbing-transcript-preferences-header--expanded[\s\S]*?transform:\s*rotate\(225deg\)/)
     expect(scss).not.toMatch(/grid-template-rows/)
     const contentRule = scss.match(
       /\.live-dubbing-transcript-preferences-content\s*\{[\s\S]*?\n\}/m
@@ -1267,10 +1412,10 @@ describe('LiveDubbingView', () => {
     expect(contentInnerRule).toMatch(/padding-inline:\s*10px/)
     expect(contentRule).not.toMatch(/opacity|transition/)
     expect(scss).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.live-dubbing-transcript-preferences-chevron[\s\S]*?transition:\s*none/)
-    expect(scss).toMatch(/\.live-dubbing-subtitle-size-select\s*\{[\s\S]*?flex:\s*0\s+1\s+120px\s*!important/)
-    expect(scss).toMatch(/\.live-dubbing-subtitle-size-select\s*\{[\s\S]*?inline-size:\s*120px\s*!important/)
-    expect(scss).toMatch(/\.live-dubbing-subtitle-size-select\s*\{[\s\S]*?height:\s*36px\s*!important/)
-    expect(scss).toMatch(/\.live-dubbing-subtitle-size-select\s*\{[\s\S]*?font-size:\s*13px\s*!important/)
+    expect(scss).toMatch(/\.live-dubbing-subtitle-size-select\s*\{[\s\S]*?flex:\s*1\s+1\s+112px\s*!important/)
+    expect(scss).toMatch(/\.live-dubbing-subtitle-size-select\s*\{[\s\S]*?inline-size:\s*112px\s*!important/)
+    expect(scss).toMatch(/\.live-dubbing-subtitle-size-select\s*\{[\s\S]*?height:\s*32px\s*!important/)
+    expect(scss).toMatch(/\.live-dubbing-subtitle-size-select\s*\{[\s\S]*?font-size:\s*12px\s*!important/)
     expect(scss).toMatch(/\.live-dubbing-subtitle-size-select\s*\{[\s\S]*?border-radius:\s*6px\s*!important/)
     expect(scss).toMatch(/\.live-dubbing-subtitle-size-select\s*\{[\s\S]*?min-width:\s*0\s*!important/)
     expect(scss).toMatch(/\.live-dubbing-view--rtl \.live-dubbing-subtitle-size-select\s*\{[\s\S]*?background-position:\s*left 10px center\s*!important/)
