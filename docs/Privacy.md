@@ -1,40 +1,60 @@
 # Privacy Policy
 
 **Effective Date:** April 30, 2025  
-**Last Updated:** March 31, 2026
+**Last Updated:** September 30, 2026
 
-I respect your privacy and am committed to protecting your personal information. This Privacy Policy explains how **Translate-It** handles data across all supported platforms (Chrome, Firefox, Edge, etc.).
+Translate It respects your privacy. This Privacy Policy explains how data is handled when you use the Translate It browser extension.
 
 ## 1. Information Collection and Storage
 
-**Translate-It** is a client-side extension. I do not operate any central servers, and I do not collect, store, or monitor your personal data or translation history.
+Translate It is primarily a client-side browser extension and does not operate a central server for translation requests.
 
-* **API Keys & Settings:** If you provide personal API keys (e.g., OpenAI, DeepSeek, DeepL, Gemini), these keys and your configuration preferences are stored locally within your browser's secure storage using standardized browser storage APIs. They are never transmitted to me or any third party, except for the specific translation provider you have selected.
-* **Local Storage:** All settings stay on your device and are deleted if you uninstall the extension.
+Translate It does not centrally collect, store, monitor, or sell your personal data, translation history, or the content you process with the extension.
 
-## 2. Third-Party Translation Providers
+Settings, preferences, and API keys you provide are stored using your browser's extension storage. Translate It does not maintain a separate central database containing this information.
 
-This website/extension acts as a bridge between your browser and various third-party translation services. When you request a translation, the selected text is sent directly from your browser to the provider you have chosen (e.g., Google, Microsoft, Yandex, OpenAI, etc.).
+## 2. Providers, Endpoints, and Data Processing
 
-* **Data Handling:** Each provider has its own Privacy Policy. By choosing a specific provider, you are subject to their respective terms and data processing practices.
-* **Direct Interaction:** The extension communicates directly with the provider's API. There is no intermediate "middleman" server intercepting your data.
-* **Service Terms:** For providers requiring an API key, data usage depends on your specific agreement/tier with that provider.
+Translate It allows you to choose how your content is processed. Depending on the feature and your configuration, you may use:
 
-## 3. Security
+- Supported third-party cloud providers
+- Custom API-compatible providers
+- Local or self-hosted endpoints
 
-The security of your API keys depends on the security of your device and browser storage. Since keys are stored locally, I recommend maintaining good device security and not sharing your API keys with others.
+When a feature requires external processing, the content necessary to perform that request is sent to the provider or endpoint you selected.
+
+This may include text or other content submitted for translation. When using Live Dubbing, audio captured from the selected browser tab may be sent to the selected Live Dubbing provider for real-time processing.
+
+Translate It does not operate an intermediary translation server between your browser and the selected provider or endpoint.
+
+If you configure a proxy, requests may be routed through that proxy before reaching their destination. The privacy and security of a custom endpoint or proxy depend on the service or system you choose to use.
+
+Third-party providers process data according to their own terms, privacy policies, and data-handling practices. You should review the policies of any third-party service you choose to use.
+
+## 3. API Keys and Security
+
+API keys are stored in browser extension storage and are used only when required to communicate with the provider or endpoint you selected.
+
+The security of locally stored settings and API keys also depends on the security of your device, browser profile, configured endpoints, and any proxy you choose to use.
+
+You should protect your device and API keys and avoid sharing credentials with others.
 
 ## 4. Children's Privacy
 
-This extension does not knowingly collect or solicit any information from children under the age of 13.
+Translate It does not knowingly collect or maintain personal information from children.
 
 ## 5. Changes to this Policy
 
-I reserve the right to update this policy to reflect changes in browser requirements or the addition of new providers. Please review this page periodically for updates.
+This Privacy Policy may be updated when Translate It changes, new providers or features are introduced, or browser and platform requirements change.
+
+The "Last Updated" date above will be updated when material changes are made.
 
 ## 6. Contact
 
-If you have questions about this Privacy Policy or the security of your data, you can reach out via:
+For questions about this Privacy Policy or the handling of your data, contact:
 
-* **Email:** m.khani2810@gmail.com
-* **GitHub Issues:** [https://github.com/Translate-It-App/Translate-It/issues](https://github.com/Translate-It-App/Translate-It/issues)
+**Email:** support@translate-it.app
+
+For general project issues:
+
+**GitHub:** https://github.com/Translate-It-App/Translate-It/issues
