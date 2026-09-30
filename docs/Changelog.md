@@ -3,7 +3,7 @@
 ##### Added
 
 - Added **Live Dubbing** to the Popup on Chrome with Gemini Live and OpenAI Realtime, including volume controls and bilingual subtitles.
-- Added [Requesty](#/providers?highlight=REQUESTY_API_KEY) as a translation provider.
+- Added [**Requesty.ai**](#/providers?highlight=REQUESTY_API_KEY) as a translation provider.
 
 ##### Fixed
 
