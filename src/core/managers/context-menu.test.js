@@ -48,6 +48,7 @@ const mocks = vi.hoisted(() => {
       getAllAvailable: vi.fn()
     },
     getEffectiveProviderAsync: vi.fn().mockResolvedValue('googlev2'),
+    handlePageTranslation: vi.fn().mockResolvedValue({ success: true }),
     getDebugModeAsync: vi.fn().mockResolvedValue(false),
     getTranslationString: vi.fn((key) => key),
     tabPermissionChecker: {
@@ -71,6 +72,7 @@ vi.mock('@/shared/config/config.js', () => ({
   CONFIG: {
     TRANSLATION_API: 'googlev2',
     CONTEXT_MENU_VISIBILITY: {
+      PAGE_CONTEXT_PAGE_TRANSLATION: true,
       PAGE_CONTEXT_SELECT_ELEMENT: true,
       PAGE_CONTEXT_PDF_TRANSLATOR: true,
       ACTION_CONTEXT_SELECT_ELEMENT: true,
@@ -83,7 +85,7 @@ vi.mock('@/shared/config/config.js', () => ({
       ACTION_CONTEXT_HELP: true
     }
   },
-  TranslationMode: { Select_Element: 'select-element' },
+  TranslationMode: { Select_Element: 'select-element', Page: 'page-translation-batch' },
   getDebugModeAsync: mocks.getDebugModeAsync,
   getTargetLanguageAsync: vi.fn().mockResolvedValue('en'),
   getEffectiveProviderAsync: mocks.getEffectiveProviderAsync
@@ -126,12 +128,17 @@ vi.mock('@/core/background/handlers/lazy/handleElementSelectionLazy.js', () => (
   handleActivateSelectElementModeLazy: vi.fn()
 }));
 
+vi.mock('@/core/background/handlers/page-translation/handlePageTranslation.js', () => ({
+  handlePageTranslation: mocks.handlePageTranslation
+}));
+
 import { ContextMenuManager } from './context-menu.js';
 import { MessageActions } from '@/shared/messaging/core/MessageActions.js';
 
 const CONTEXT_MENU_SETTING_KEYS = [
   'EXTENSION_ENABLED',
   'TRANSLATE_WITH_SELECT_ELEMENT',
+  'WHOLE_PAGE_TRANSLATION_ENABLED',
   'ENABLE_SCREEN_CAPTURE',
   'CONTEXT_MENU_VISIBILITY',
   'TRANSLATION_API',
@@ -151,6 +158,7 @@ const CONTEXT_MENU_SETTING_KEYS = [
 ];
 
 const CONTEXT_MENU_VISIBILITY = {
+  PAGE_CONTEXT_PAGE_TRANSLATION: true,
   PAGE_CONTEXT_SELECT_ELEMENT: true,
   PAGE_CONTEXT_PDF_TRANSLATOR: true,
   ACTION_CONTEXT_SELECT_ELEMENT: true,
@@ -170,6 +178,7 @@ const SETTINGS_PARENT_ID = 'settings-parent';
 const createSettings = (overrides = {}) => ({
   EXTENSION_ENABLED: true,
   TRANSLATE_WITH_SELECT_ELEMENT: true,
+  WHOLE_PAGE_TRANSLATION_ENABLED: true,
   ENABLE_SCREEN_CAPTURE: true,
   CONTEXT_MENU_VISIBILITY: { ...CONTEXT_MENU_VISIBILITY },
   TRANSLATION_API: 'googlev2',
@@ -208,6 +217,7 @@ describe('ContextMenuManager keyed storage reads', () => {
       { id: 'gemini', name: 'Google Gemini', isLazy: true, category: 'ai' }
     ]);
     mocks.getEffectiveProviderAsync.mockResolvedValue('googlev2');
+    mocks.handlePageTranslation.mockResolvedValue({ success: true });
     mocks.storageManager.get.mockResolvedValue(createSettings());
 
     manager = new ContextMenuManager();
@@ -244,6 +254,8 @@ describe('ContextMenuManager keyed storage reads', () => {
     const menuIds = getCreatedMenuIds();
     expect(menuIds).not.toContain('translate-with-select-element');
     expect(menuIds).not.toContain('screen-capture-page');
+    expect(menuIds).not.toContain('translate-page');
+    expect(menuIds).not.toContain('restore-page');
     expect(menuIds).toContain('api-provider-googlev2');
     expect(menuIds).not.toContain('api-provider-openai');
     expect(menuIds).not.toContain('api-provider-gemini');
@@ -267,6 +279,192 @@ describe('ContextMenuManager keyed storage reads', () => {
     expect(menuIds).not.toContain('action-translate-element');
     expect(menuIds).not.toContain('screen-capture-page');
     expect(menuIds).not.toContain('screen-capture-action');
+  });
+
+  it('creates localized whole-page commands for all supported page contexts', async () => {
+    await manager._setupMenusInternal('ja');
+
+    expect(getCreatedMenu('translate-page')).toEqual({
+      id: 'translate-page',
+      title: 'context_menu_translate_page',
+      contexts: ['page', 'selection', 'link', 'image', 'video', 'audio']
+    });
+    expect(getCreatedMenu('restore-page')).toEqual({
+      id: 'restore-page',
+      title: 'context_menu_restore_page',
+      contexts: ['page', 'selection', 'link', 'image', 'video', 'audio']
+    });
+    expect(mocks.getTranslationString).toHaveBeenCalledWith('context_menu_translate_page', 'ja');
+    expect(mocks.getTranslationString).toHaveBeenCalledWith('context_menu_restore_page', 'ja');
+  });
+
+  it('hides both whole-page commands when their visibility preference is disabled', async () => {
+    mocks.storageManager.get.mockResolvedValue(createSettings({
+      CONTEXT_MENU_VISIBILITY: {
+        ...CONTEXT_MENU_VISIBILITY,
+        PAGE_CONTEXT_PAGE_TRANSLATION: false
+      }
+    }));
+
+    await manager._setupMenusInternal();
+
+    expect(getCreatedMenu('translate-page')).toBeUndefined();
+    expect(getCreatedMenu('restore-page')).toBeUndefined();
+    expect(getCreatedMenu('translate-with-select-element')).toBeDefined();
+  });
+
+  it('keeps restore available when whole-page translation is disabled', async () => {
+    mocks.storageManager.get.mockResolvedValue(createSettings({ WHOLE_PAGE_TRANSLATION_ENABLED: false }));
+
+    await manager._setupMenusInternal();
+
+    expect(getCreatedMenu('translate-page')).toBeUndefined();
+    expect(getCreatedMenu('restore-page')).toBeDefined();
+  });
+
+  it('uses the Whole Page provider independently of the Select Element provider', async () => {
+    mocks.getEffectiveProviderAsync.mockImplementation(async (mode) => (
+      mode === 'page-translation-batch' ? 'googlev2' : 'vajehyab'
+    ));
+
+    await manager._setupMenusInternal();
+
+    expect(getCreatedMenu('translate-page')).toBeDefined();
+    expect(getCreatedMenu('translate-with-select-element')).toBeUndefined();
+  });
+
+  it('keeps restore available when the Whole Page provider lacks bulk support', async () => {
+    mocks.getEffectiveProviderAsync.mockImplementation(async (mode) => (
+      mode === 'page-translation-batch' ? 'vajehyab' : 'googlev2'
+    ));
+
+    await manager._setupMenusInternal();
+
+    expect(getCreatedMenu('translate-page')).toBeUndefined();
+    expect(getCreatedMenu('restore-page')).toBeDefined();
+    expect(getCreatedMenu('translate-with-select-element')).toBeDefined();
+  });
+
+  it('enables new whole-page commands for older visibility settings', async () => {
+    const visibility = { ...CONTEXT_MENU_VISIBILITY };
+    delete visibility.PAGE_CONTEXT_PAGE_TRANSLATION;
+    mocks.storageManager.get.mockResolvedValue(createSettings({ CONTEXT_MENU_VISIBILITY: visibility }));
+
+    await manager._setupMenusInternal();
+
+    expect(getCreatedMenu('translate-page')).toBeDefined();
+    expect(getCreatedMenu('restore-page')).toBeDefined();
+  });
+
+  it('keeps other menus available after a whole-page title lookup fails', async () => {
+    mocks.getTranslationString.mockImplementation((key) => {
+      if (key === 'context_menu_translate_page') throw new Error('page title unavailable');
+      return key;
+    });
+
+    await expect(manager.initialize()).resolves.toBeUndefined();
+
+    expect(getCreatedMenu('translate-page')).toBeUndefined();
+    expect(getCreatedMenu('restore-page')).toBeDefined();
+    expect(getCreatedMenu('translate-with-select-element')).toBeDefined();
+  });
+
+  it('rebuilds page commands after the whole-page setting changes', async () => {
+    await manager.initialize();
+    const listener = mocks.browser.storage.onChanged.addListener.mock.calls[0][0];
+    mocks.browser.contextMenus.create.mockClear();
+    mocks.storageManager.get.mockResolvedValue(createSettings({ WHOLE_PAGE_TRANSLATION_ENABLED: false }));
+
+    await listener({ WHOLE_PAGE_TRANSLATION_ENABLED: { newValue: false } }, 'local');
+
+    expect(getCreatedMenu('translate-page')).toBeUndefined();
+    expect(getCreatedMenu('restore-page')).toBeDefined();
+  });
+
+  it.each([
+    ['translate-page', MessageActions.PAGE_TRANSLATE],
+    ['restore-page', MessageActions.PAGE_RESTORE]
+  ])('routes %s through the shared handler for the clicked tab', async (menuItemId, action) => {
+    const clickedTab = { id: 42, url: 'https://example.com' };
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 99 }]);
+
+    await manager.handleMenuClick({ menuItemId, frameId: 7 }, clickedTab);
+
+    expect(mocks.handlePageTranslation).toHaveBeenCalledOnce();
+    expect(mocks.handlePageTranslation).toHaveBeenCalledWith(
+      { action, context: 'context-menu' },
+      { tab: clickedTab }
+    );
+    expect(mocks.browser.tabs.query).not.toHaveBeenCalled();
+    expect(mocks.browser.tabs.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.browser.runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, {}, { id: '42' }, { id: -1 }])('does not fall back to an active tab for an invalid clicked tab: %s', async (tab) => {
+    await manager.handleMenuClick({ menuItemId: 'translate-page' }, tab);
+
+    expect(mocks.handlePageTranslation).not.toHaveBeenCalled();
+    expect(mocks.browser.tabs.query).not.toHaveBeenCalled();
+  });
+
+  it.each(['translate-page', 'restore-page'])('does not dispatch stale %s clicks after disabling the extension', async (menuItemId) => {
+    mocks.storageManager.get.mockResolvedValue(createSettings({ EXTENSION_ENABLED: false }));
+
+    await manager.handleMenuClick({ menuItemId }, { id: 42 });
+
+    expect(mocks.handlePageTranslation).not.toHaveBeenCalled();
+  });
+
+  it('does not translate after the whole-page feature is disabled', async () => {
+    mocks.storageManager.get.mockResolvedValue(createSettings({ WHOLE_PAGE_TRANSLATION_ENABLED: false }));
+
+    await manager.handleMenuClick({ menuItemId: 'translate-page' }, { id: 42 });
+
+    expect(mocks.handlePageTranslation).not.toHaveBeenCalled();
+  });
+
+  it('does not translate with a newly selected provider without bulk support', async () => {
+    mocks.getEffectiveProviderAsync.mockResolvedValue('vajehyab');
+
+    await manager.handleMenuClick({ menuItemId: 'translate-page' }, { id: 42 });
+
+    expect(mocks.handlePageTranslation).not.toHaveBeenCalled();
+  });
+
+  it('restores existing translations after disabling whole-page translation and switching providers', async () => {
+    mocks.storageManager.get.mockResolvedValue(createSettings({ WHOLE_PAGE_TRANSLATION_ENABLED: false }));
+    mocks.getEffectiveProviderAsync.mockResolvedValue('vajehyab');
+
+    await manager.handleMenuClick({ menuItemId: 'restore-page' }, { id: 42 });
+
+    expect(mocks.handlePageTranslation).toHaveBeenCalledWith(
+      { action: MessageActions.PAGE_RESTORE, context: 'context-menu' },
+      { tab: { id: 42 } }
+    );
+    expect(mocks.getEffectiveProviderAsync).not.toHaveBeenCalled();
+  });
+
+  it('keeps restricted-page failures in the canonical handler without trying another tab', async () => {
+    const result = { success: false, isRestrictedPage: true };
+    mocks.handlePageTranslation.mockResolvedValue(result);
+
+    await manager.handleMenuClick({ menuItemId: 'translate-page' }, { id: 42 });
+
+    expect(mocks.handlePageTranslation).toHaveBeenCalledOnce();
+    expect(mocks.browser.tabs.query).not.toHaveBeenCalled();
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'Page context menu command was not completed',
+      { action: MessageActions.PAGE_TRANSLATE, tabId: 42, result }
+    );
+  });
+
+  it('logs dispatch errors without an unhandled context-menu rejection', async () => {
+    const error = new Error('page command unavailable');
+    mocks.handlePageTranslation.mockRejectedValue(error);
+
+    await expect(manager.handleMenuClick({ menuItemId: 'restore-page' }, { id: 42 })).resolves.toBeUndefined();
+
+    expect(mocks.logger.error).toHaveBeenCalledWith('Context menu click handler failed:', error);
   });
 
   it('creates the expected Action menu structure with nested children', async () => {

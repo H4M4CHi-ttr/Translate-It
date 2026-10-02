@@ -852,6 +852,7 @@ describe('Settings Migrations', () => {
     expect(updates.CONTEXT_MENU_VISIBILITY.PAGE_CONTEXT_SELECT_ELEMENT).toBe(true);
     expect(updates.CONTEXT_MENU_VISIBILITY.ACTION_CONTEXT_PDF_TRANSLATOR).toBe(true);
     expect(updates.CONTEXT_MENU_VISIBILITY.ACTION_CONTEXT_SUBTITLE_TRANSLATOR).toBe(true);
+    expect(updates.CONTEXT_MENU_VISIBILITY.PAGE_CONTEXT_PAGE_TRANSLATION).toBe(true);
   });
 
   it('should preserve existing nested user values and backfill missing MODE_PROVIDERS members', async () => {

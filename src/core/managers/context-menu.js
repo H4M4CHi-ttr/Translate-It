@@ -29,6 +29,8 @@ const logger = getScopedLogger(LOG_COMPONENTS.CORE, 'context-menu');
 
 // --- Constants for Menu Item IDs ---
 const PAGE_CONTEXT_MENU_ID = "translate-with-select-element";
+const PAGE_CONTEXT_TRANSLATE_ID = "translate-page";
+const PAGE_CONTEXT_RESTORE_ID = "restore-page";
 const PAGE_CONTEXT_PDF_ID = "open-pdf-with-link";
 const ACTION_TRANSLATE_ELEMENT_ID = "action-translate-element";
 const SCREEN_CAPTURE_MENU_ID = "screen-capture";
@@ -46,6 +48,7 @@ const API_PROVIDER_ITEM_ID_PREFIX = "api-provider-";
 const CONTEXT_MENU_SETTING_KEYS = [
   'EXTENSION_ENABLED',
   'TRANSLATE_WITH_SELECT_ELEMENT',
+  'WHOLE_PAGE_TRANSLATION_ENABLED',
   'ENABLE_SCREEN_CAPTURE',
   'CONTEXT_MENU_VISIBILITY',
   'TRANSLATION_API',
@@ -410,14 +413,21 @@ export class ContextMenuManager extends ResourceTracker {
       // Prepare all required data before removing working menus.
       const settings = await storageManager.get(CONTEXT_MENU_SETTING_KEYS, false);
       const isExtensionEnabled = settings.EXTENSION_ENABLED !== false;
-      const selectElementApi = await getEffectiveProviderAsync(TranslationMode.Select_Element);
+      const [selectElementApi, pageApi] = await Promise.all([
+        getEffectiveProviderAsync(TranslationMode.Select_Element),
+        getEffectiveProviderAsync(TranslationMode.Page),
+      ]);
       const provider = findProviderById(selectElementApi);
       const isBulkSupported = provider?.features?.includes('bulk') ?? false;
       const isSelectElementEnabled = isExtensionEnabled &&
                                    (settings.TRANSLATE_WITH_SELECT_ELEMENT !== false) &&
                                    isBulkSupported;
       const isScreenCaptureEnabled = isExtensionEnabled && (settings.ENABLE_SCREEN_CAPTURE !== false);
+      const isPageTranslationEnabled = isExtensionEnabled &&
+                                      (settings.WHOLE_PAGE_TRANSLATION_ENABLED !== false) &&
+                                      (findProviderById(pageApi)?.features?.includes('bulk') ?? false);
       const visibility = settings.CONTEXT_MENU_VISIBILITY || CONFIG.CONTEXT_MENU_VISIBILITY;
+      const isPageMenuVisible = isExtensionEnabled && visibility.PAGE_CONTEXT_PAGE_TRANSLATION !== false;
       const commands = await browser.commands.getAll();
 
       // Clear existing menus first and wait for completion
@@ -442,6 +452,33 @@ export class ContextMenuManager extends ResourceTracker {
 
       this.createdMenus.clear();
       logger.debug("[ContextMenuManager] Cleared existing menus and verified");
+
+      // Whole-page commands share the existing page translation/restore workflow.
+      if (isPageMenuVisible && isPageTranslationEnabled) {
+        try {
+          await this.createMenu({
+            id: PAGE_CONTEXT_TRANSLATE_ID,
+            title: (await getTranslationString("context_menu_translate_page", locale)) || "Translate This Page",
+            contexts: ["page", "selection", "link", "image", "video", "audio"],
+          });
+        } catch (e) {
+          logger.error("Error creating page translation context menu:", e);
+        }
+      }
+
+      // Keep restore available even after disabling page translation or changing
+      // to a provider without bulk support, so existing translations can be undone.
+      if (isPageMenuVisible) {
+        try {
+          await this.createMenu({
+            id: PAGE_CONTEXT_RESTORE_ID,
+            title: (await getTranslationString("context_menu_restore_page", locale)) || "Restore Original Page",
+            contexts: ["page", "selection", "link", "image", "video", "audio"],
+          });
+        } catch (e) {
+          logger.error("Error creating page restore context menu:", e);
+        }
+      }
 
       // --- 1. Create Page Context Menu (Select Element) ---
       if (isSelectElementEnabled && visibility.PAGE_CONTEXT_SELECT_ELEMENT) {
@@ -823,6 +860,32 @@ export class ContextMenuManager extends ResourceTracker {
   }
 
   /**
+   * Route a whole-page command through the canonical Background handler.
+   * The clicked tab is authoritative even if the active tab changes meanwhile.
+   */
+  async _handlePageCommand(action, tab) {
+    if (!Number.isInteger(tab?.id) || tab.id < 0) return;
+
+    const settings = await storageManager.get([
+      'EXTENSION_ENABLED',
+      'WHOLE_PAGE_TRANSLATION_ENABLED',
+    ], false);
+    if (settings.EXTENSION_ENABLED === false) return;
+
+    if (action === MessageActions.PAGE_TRANSLATE) {
+      if (settings.WHOLE_PAGE_TRANSLATION_ENABLED === false) return;
+      const provider = await getEffectiveProviderAsync(TranslationMode.Page);
+      if (!findProviderById(provider)?.features?.includes('bulk')) return;
+    }
+
+    const { handlePageTranslation } = await import('@/core/background/handlers/page-translation/handlePageTranslation.js');
+    const result = await handlePageTranslation({ action, context: 'context-menu' }, { tab });
+    if (result?.success === false) {
+      logger.warn('Page context menu command was not completed', { action, tabId: tab.id, result });
+    }
+  }
+
+  /**
    * Handle context menu click
    * @param {Object} info - Click information
    * @param {Object} tab - Tab information
@@ -862,6 +925,14 @@ export class ContextMenuManager extends ResourceTracker {
 
       // --- Handle specific menu items ---
       switch (info.menuItemId) {
+        case PAGE_CONTEXT_TRANSLATE_ID:
+          await this._handlePageCommand(MessageActions.PAGE_TRANSLATE, tab);
+          break;
+
+        case PAGE_CONTEXT_RESTORE_ID:
+          await this._handlePageCommand(MessageActions.PAGE_RESTORE, tab);
+          break;
+
         case PAGE_CONTEXT_MENU_ID:
           await this._activateSelectElement(tab);
           break;
@@ -1014,6 +1085,7 @@ export class ContextMenuManager extends ResourceTracker {
             const relevantKeys = [
               'TRANSLATION_API', 
               'TRANSLATE_WITH_SELECT_ELEMENT', 
+              'WHOLE_PAGE_TRANSLATION_ENABLED',
               'ENABLE_SCREEN_CAPTURE',
               'MODE_PROVIDERS', 
               'EXTENSION_ENABLED', 

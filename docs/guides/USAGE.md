@@ -18,20 +18,28 @@ To translate any specific part of a web page, you first need to activate `Elemen
 
 Once the mode is active, hover over any part of the page to highlight it. Click the highlighted area to instantly translate its content.
 
-### 3. Desktop FAB Menu (Quick Access)
+### 3. Whole Page Translation from the Context Menu
+
+Right-click anywhere on a web page and choose **Translate This Page**. This uses the Whole Page provider, target language, lazy-loading settings, and token-usage confirmation configured in Options, and includes supported frames in the clicked tab.
+
+Choose **Restore Original Page** to stop page translation and restore the original content. Restore remains available after disabling Whole Page Translation or switching to a provider without bulk support, so existing page translations can still be undone.
+
+Both entries are enabled by default. To hide them, turn off **Show in context menu** under **Options → Activation → Whole Page Translation**. The translation entry is also hidden when the extension or Whole Page Translation is disabled, or the Whole Page provider does not support bulk translation. Disabling the extension hides both entries.
+
+### 4. Desktop FAB Menu (Quick Access)
 On desktop browsers, a floating action button (FAB) appears on the right side of the page. 
 - **Quick Actions:** Hover or click the FAB to access "Select Element", "Page Translation", or "Settings".
 - **Dynamic State:** It shows real-time translation progress when a page is being translated.
 - **Draggable:** You can drag the FAB vertically to reposition it.
 - **Smart Fading:** It fades out when not in use to stay unobtrusive.
 
-### 4. Mobile & Touchscreen Support
+### 5. Mobile & Touchscreen Support
 The extension is fully compatible with **touchscreen devices** and mobile browsers (like Kiwi, Lemur, and Firefox Android).
 - **Bottom Sheet:** Instead of windows/sidepanels, mobile users get a thumb-friendly "Bottom Sheet" at the bottom of the screen.
 - **Gestures:** Swipe up to expand the view, or swipe down to dismiss/peek.
 - **Touch-Optimized:** All buttons and interaction areas are sized for easy touch access.
 
-### 5. Revert Translations
+### 6. Revert Translations
 To undo completed Select Element translations and restore the original text:
 - Press `ESC` twice quickly.
 - Click the **Revert** button in the extension popup or side panel.

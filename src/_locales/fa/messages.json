@@ -44,6 +44,18 @@
   "context_menu_translate_with_selection": {
     "message": "ترجمه انتخابی"
   },
+  "context_menu_translate_page": {
+    "message": "ترجمه این صفحه"
+  },
+  "context_menu_restore_page": {
+    "message": "بازگردانی صفحه اصلی"
+  },
+  "show_page_translation_in_context_menu_label": {
+    "message": "نمایش در منوی کلیک‌راست"
+  },
+  "show_page_translation_in_context_menu_description": {
+    "message": "نمایش گزینه‌های ترجمه صفحه و بازگردانی متن اصلی در منوی کلیک‌راست مرورگر."
+  },
   "context_menu_api_provider": {
     "message": "سرور API"
   },

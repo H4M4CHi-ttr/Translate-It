@@ -359,6 +359,7 @@ export const CONFIG = {
 
   // --- UI & Styling ---
   CONTEXT_MENU_VISIBILITY: {
+    PAGE_CONTEXT_PAGE_TRANSLATION: true, // Whole-page translate and restore in page context menus
     PAGE_CONTEXT_SELECT_ELEMENT: true,    // نمایش در کلیک‌راست صفحات
     PAGE_CONTEXT_SCREEN_CAPTURE: true,    // نمایش تصویربرداری در کلیک‌راست صفحات
     PAGE_CONTEXT_PDF_TRANSLATOR: true,    // نمایش مترجم PDF در کلیک‌راست لینک‌های PDF
