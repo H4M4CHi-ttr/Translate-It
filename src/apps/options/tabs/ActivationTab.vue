@@ -327,6 +327,20 @@
         :class="{ open: wholePageEnabled }"
       >
         <div class="sub-options-inner">
+          <div
+            id="PAGE_CONTEXT_PAGE_TRANSLATION"
+            class="setting-group sub-setting-group"
+          >
+            <BaseCheckbox
+              v-model="showPageTranslationInContextMenu"
+              :disabled="!extensionEnabled"
+              :label="t('show_page_translation_in_context_menu_label') || 'Show in context menu'"
+            />
+            <span class="setting-description">
+              {{ t('show_page_translation_in_context_menu_description') || 'Display page translation and restore options in the browser\'s right-click context menu.' }}
+            </span>
+          </div>
+
           <div 
             id="WHOLE_PAGE_TRIGGER_MODE"
             class="setting-group sub-setting-group whole-page-trigger-group"
@@ -932,6 +946,15 @@ const enhancedTripleClickDrag = createSetting('ENHANCED_TRIPLE_CLICK_DRAG', fals
 
 // Whole Page
 const wholePageEnabled = createSetting('WHOLE_PAGE_TRANSLATION_ENABLED', true)
+const showPageTranslationInContextMenu = computed({
+  get: () => contextMenuVisibility.value?.PAGE_CONTEXT_PAGE_TRANSLATION ?? true,
+  set: (val) => {
+    contextMenuVisibility.value = {
+      ...contextMenuVisibility.value,
+      PAGE_CONTEXT_PAGE_TRANSLATION: val
+    }
+  }
+})
 const wholePageLazyLoading = createSetting('WHOLE_PAGE_LAZY_LOADING', true)
 const wholePageAutoTranslate = createSetting('WHOLE_PAGE_AUTO_TRANSLATE_ON_DOM_CHANGES', true)
 const wholePageShowOriginal = createSetting('WHOLE_PAGE_SHOW_ORIGINAL_ON_HOVER', false)

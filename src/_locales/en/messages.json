@@ -44,6 +44,18 @@
   "context_menu_translate_with_selection": {
     "message": "Translate Element"
   },
+  "context_menu_translate_page": {
+    "message": "Translate This Page"
+  },
+  "context_menu_restore_page": {
+    "message": "Restore Original Page"
+  },
+  "show_page_translation_in_context_menu_label": {
+    "message": "Show in context menu"
+  },
+  "show_page_translation_in_context_menu_description": {
+    "message": "Display page translation and restore options in the browser's right-click context menu."
+  },
   "context_menu_api_provider": {
     "message": "API Provider"
   },

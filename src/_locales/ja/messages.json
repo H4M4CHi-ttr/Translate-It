@@ -44,6 +44,18 @@
   "context_menu_translate_with_selection": {
     "message": "要素を翻訳"
   },
+  "context_menu_translate_page": {
+    "message": "このページを翻訳"
+  },
+  "context_menu_restore_page": {
+    "message": "ページを原文に戻す"
+  },
+  "show_page_translation_in_context_menu_label": {
+    "message": "右クリックメニューに表示"
+  },
+  "show_page_translation_in_context_menu_description": {
+    "message": "ブラウザーの右クリックメニューに、ページ翻訳と原文復元の項目を表示します。"
+  },
   "context_menu_api_provider": {
     "message": "APIプロバイダー"
   },
