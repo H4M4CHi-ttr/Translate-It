@@ -1,5 +1,8 @@
 import { ref } from 'vue'
 import { TranslationMode } from '@/shared/config/config.js'
+import { NewlineManager } from '@/features/translation/utils/NewlineManager.js'
+
+const SOURCE_TEXT_REFERENCE = '⟦SOURCE_TEXT_IN_USER_MESSAGE⟧'
 
 /**
  * Composable to manage prompt preview generation logic.
@@ -39,10 +42,13 @@ export function usePromptPreview(customLogger = null) {
       getEnableDictionaryAsync,
       getPromptDictionaryAsync,
       getSourceLanguageAsync,
+      CONFIG,
     } = await import('@/shared/config/config.js')
 
     const { getLanguageNameFromCode, getCanonicalCode } = await import('@/shared/config/languageConstants.js')
     const { AIConversationHelper } = await import('@/features/translation/providers/utils/AIConversationHelper.js')
+    const { HISTORICAL_PROMPT_DEFAULTS } = await import('@/shared/config/promptHistoricalDefaults.js')
+    const { shouldUseAutoPromptAsync } = await import('@/features/translation/utils/bilingualPromptHelper.js')
 
     const isSpecificTextJsonFormat = (obj) => {
       return (
@@ -117,11 +123,22 @@ export function usePromptPreview(customLogger = null) {
         ? await getPromptBASEAIBatchAutoAsync()
         : await getPromptBASEAIBatchAsync()
 
-      return batchPromptTemplate
+      const systemPrompt = batchPromptTemplate
         .replace(/\$_{SOURCE}/g, sourceName)
         .replace(/\$_{TARGET}/g, targetName)
         .replace(/\$_{PROMPT_INSTRUCTIONS}/g, promptInstructions)
-        .replace(/\$_{TEXT}/g, text)
+        .replace(/\$_{COUNT}/g, String(JSON.parse(text).length))
+        .replace(/\$_{MARKER_PRESERVATION_INSTRUCTIONS}/g, '')
+        .replace(/\$_{TEXT}/g, 'the text provided in the user message')
+
+      const userText = JSON.stringify({
+        translations: JSON.parse(text).map((item, index) => ({
+          id: String(item.id ?? item.i ?? index),
+          text: item.text
+        }))
+      })
+
+      return `[SYSTEM PROMPT]\n${systemPrompt.trim()}\n\n[USER MESSAGE (JSON)]\n${userText}`
     }
 
     if (translateMode === TranslationMode.Select_Element && !isJsonMode) {
@@ -134,25 +151,53 @@ export function usePromptPreview(customLogger = null) {
     }
 
     let promptBase
+    let editableBaseKey
     if (isJsonMode) {
       promptBase = await getPromptBASESelectAsync()
     } else if (translateMode === TranslationMode.Popup_Translate || translateMode === TranslationMode.Sidepanel_Translate) {
       promptBase = await getPromptPopupTranslateAsync()
     } else if (await getEnableDictionaryAsync() && translateMode === TranslationMode.Dictionary_Translation) {
       promptBase = await getPromptDictionaryAsync()
+      editableBaseKey = 'PROMPT_BASE_DICTIONARY'
     } else {
       if (translateMode === TranslationMode.ScreenCapture) {
         promptBase = await getPromptBASEScreenCaptureAsync()
       } else {
-        promptBase = sourceLang === 'auto' ? await getPromptBASEFieldAutoAsync() : await getPromptBASEFieldAsync()
+        const useAutoPrompt = await shouldUseAutoPromptAsync(sourceLang, TranslationMode.Field)
+        editableBaseKey = useAutoPrompt ? 'PROMPT_BASE_FIELD_AUTO' : 'PROMPT_BASE_FIELD'
+        promptBase = useAutoPrompt ? await getPromptBASEFieldAutoAsync() : await getPromptBASEFieldAsync()
       }
     }
 
-    return promptBase
+    const resolvedPrompt = promptBase
       .replace(/\$_{SOURCE}/g, sourceName)
       .replace(/\$_{TARGET}/g, targetName)
       .replace(/\$_{PROMPT_INSTRUCTIONS}/g, promptInstructions)
-      .replace(/\$_{TEXT}/g, text)
+
+    if (isAI) {
+      const isCustomizedEditableBase = editableBaseKey
+        && promptBase !== CONFIG[editableBaseKey]
+        && !(HISTORICAL_PROMPT_DEFAULTS[editableBaseKey] || []).some((entry) => (
+          (typeof entry === 'string' ? entry : entry?.value) === promptBase
+        ))
+      if (isCustomizedEditableBase) {
+        const renderCustomBase = (sourceText) => promptBase
+          .replace(/\$_{SOURCE}/g, sourceName)
+          .replace(/\$_{TARGET}/g, targetName)
+          .replace(/\$_{PROMPT_INSTRUCTIONS}/g, promptInstructions)
+          .replace(/\$_{COUNT}/g, '1')
+          .replace(/\$_{TEXT}/g, () => sourceText)
+        const sourceFreeBase = renderCustomBase(SOURCE_TEXT_REFERENCE)
+        const protectedText = NewlineManager.protect(text)
+        const userBase = renderCustomBase(protectedText)
+          + (promptBase.includes('$_{TEXT}') ? '' : `\n${protectedText}`)
+        return `[SYSTEM PROMPT]\n${sourceFreeBase.trim()}\n\n[USER MESSAGE]\n${userBase}`
+      }
+      const systemPrompt = resolvedPrompt.replace(/\$_{TEXT}/g, 'the text provided in the user message')
+      return `[SYSTEM PROMPT]\n${systemPrompt.trim()}\n\n[USER MESSAGE]\n${text}`
+    }
+
+    return resolvedPrompt.replace(/\$_{TEXT}/g, text)
   }
 
   /**

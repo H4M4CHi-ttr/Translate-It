@@ -7,7 +7,7 @@ import { AIConversationHelper } from './utils/AIConversationHelper.js';
 import { createTranslationOperation } from '../ir/TranslationOperation.js';
 import { CompletionTermination } from '../ir/CompletionContract.js';
 import { ResponseFormat } from '@/shared/config/translationConstants.js';
-import { CONFIG } from '@/shared/config/config.js';
+import { CONFIG, TranslationMode } from '@/shared/config/config.js';
 
 // Mock Dependencies
 vi.mock('@/shared/proxy/ProxyManager.js', () => ({
@@ -26,6 +26,7 @@ vi.mock('@/shared/config/config.js', async (importOriginal) => {
     getGeminiModelAsync: vi.fn().mockResolvedValue('gemini-3.8-flash'),
     getGeminiThinkingModeAsync: vi.fn().mockResolvedValue('default'),
     getGeminiApiUrlAsync: vi.fn().mockResolvedValue('https://generativelanguage.googleapis.com/v1beta/models'),
+    getPromptAsync: vi.fn().mockResolvedValue('Translate $_{TEXT} from $_{SOURCE} to $_{TARGET}'),
   };
 });
 
@@ -55,6 +56,65 @@ describe('GeminiProvider Error Handling', () => {
 
     const result = await provider._callAI('system', 'Hello World');
     expect(result).toBe('سلام دنیا');
+  });
+
+  it('uses the supplied original source length instead of transformed userText length', async () => {
+    const executeRequest = vi.spyOn(provider, '_executeRequest').mockResolvedValue('translated');
+    const transformedText = '<compatibility-wrapper>source</compatibility-wrapper>';
+
+    await provider._callAI('system', transformedText, { originalCharCount: 6 });
+
+    expect(executeRequest.mock.calls[0][0].originalCharCount).toBe(6);
+  });
+
+  it('sends source text from real prompt preparation to the Gemini contents payload', async () => {
+    const executeRequest = vi.spyOn(provider, '_executeRequest').mockResolvedValue('translated');
+    const { systemPrompt, userText } = await AIConversationHelper.preparePromptAndText(
+      'Who are you?', 'en', 'fa', TranslationMode.Popup_Translate, 'ai'
+    );
+
+    await provider._callAI(systemPrompt, userText);
+
+    const payload = JSON.parse(executeRequest.mock.calls[0][0].fetchOptions.body);
+    expect(payload.contents).toEqual([{ parts: [{ text: 'Who are you?' }] }]);
+    expect(payload.contents[0].parts[0].text).not.toBe('');
+    expect(payload.systemInstruction.parts[0].text).not.toContain('Who are you?');
+  });
+
+  it('sends a customized Popup base as non-empty Gemini user content without duplicating source', async () => {
+    const config = await import('@/shared/config/config.js');
+    const customBase = vi.spyOn(config, 'getPromptPopupTranslateAsync')
+      .mockResolvedValue('<source>$_{TEXT}</source> keep this wrapper');
+    const executeRequest = vi.spyOn(provider, '_executeRequest').mockResolvedValue('translated');
+    const source = 'literal $& source';
+    const { systemPrompt, userText } = await AIConversationHelper.preparePromptAndText(
+      source, 'en', 'fa', TranslationMode.Popup_Translate, 'ai'
+    );
+
+    await provider._callAI(systemPrompt, userText);
+
+    const payload = JSON.parse(executeRequest.mock.calls[0][0].fetchOptions.body);
+    expect(payload.contents).toEqual([{ parts: [{ text: `<source>${source}</source> keep this wrapper` }] }]);
+    expect(payload.contents[0].parts[0].text).not.toBe('');
+    expect(payload.systemInstruction.parts[0].text).toContain('<source>⟦SOURCE_TEXT_IN_USER_MESSAGE⟧</source> keep this wrapper');
+    expect(payload.systemInstruction.parts[0].text).not.toContain(source);
+    expect(payload.contents[0].parts[0].text).toContain(source);
+    expect((payload.contents[0].parts[0].text.match(/literal \$& source/g) || []).length).toBe(1);
+    customBase.mockRestore();
+  });
+
+  it('keeps customized Popup wrapping through the provider array prompt-preparation boundary', async () => {
+    const config = await import('@/shared/config/config.js');
+    const customBase = vi.spyOn(config, 'getPromptPopupTranslateAsync')
+      .mockResolvedValue('<source>$_{TEXT}</source> provider boundary');
+    const { systemPrompt, userText } = await provider._preparePromptAndText(
+      ['literal $& source'], 'en', 'fa', TranslationMode.Popup_Translate, null
+    );
+
+    expect(systemPrompt).toBe('<source>⟦SOURCE_TEXT_IN_USER_MESSAGE⟧</source> provider boundary');
+    expect(systemPrompt).not.toContain('literal $& source');
+    expect(userText).toBe('<source>literal $& source</source> provider boundary');
+    customBase.mockRestore();
   });
 
   it.each([ResponseFormat.JSON_OBJECT, ResponseFormat.JSON_ARRAY])('uses REST JSON MIME field for %s', async (expectedFormat) => {
