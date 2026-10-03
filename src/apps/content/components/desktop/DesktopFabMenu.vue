@@ -105,14 +105,16 @@
             <!-- Secondary Action (Auto-Translate Star Toggle) -->
             <button
               v-if="item.secondaryAction"
+              ref="scopeTrigger"
               class="fab-menu-item-secondary-btn"
               :class="{ 
                 'is-active': item.secondaryAction.active,
                 'is-disabled': item.secondaryAction.disabled
               }"
-              :disabled="item.secondaryAction.disabled"
               :title="item.secondaryAction.title"
-              @click.stop="item.secondaryAction.handler()"
+              :aria-label="item.secondaryAction.title"
+              :aria-expanded="scopeMenuOpen"
+              @click.stop="toggleScopeDisclosure"
             >
               <svg 
                 viewBox="0 0 24 24" 
@@ -130,6 +132,34 @@
                 />
               </svg>
             </button>
+            <div
+              v-if="item.secondaryAction && scopeMenuOpen"
+              class="fab-auto-translate-scopes"
+              role="group"
+              :aria-label="t('auto_translate_scope_menu_label', 'Auto-translate scope')"
+              @click.stop
+              @keydown.escape.stop="onScopeGroupKeydown"
+            >
+              <button
+                ref="firstScopeAction"
+                :aria-pressed="hasPageRule"
+                @click.stop="scopeActions.togglePageScope()"
+              >
+                <span>{{ hasPageRule ? '✓' : '' }}</span>{{ t('auto_translate_scope_this_page', 'This Page') }}
+              </button>
+              <button
+                v-if="siteScopeAvailable"
+                :aria-pressed="hasSiteRule"
+                @click.stop="scopeActions.toggleSiteScope()"
+              >
+                <span>{{ hasSiteRule ? '✓' : '' }}</span>{{ t('auto_translate_scope_this_site', 'This Site') }}
+              </button>
+              <template v-if="showManageRules">
+                <div>{{ t('auto_translate_managed_by_broader_rule', 'Managed by a broader rule') }}</div><button @click.stop="openManageRules">
+                  {{ t('auto_translate_manage_rules', 'Manage Rules') }}
+                </button>
+              </template>
+            </div>
           </div>
         </template>
       </div>
@@ -269,7 +299,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue';
 import { injectStylesToShadowRoot } from '@/utils/ui/styleInjector.js';
 import { useUnifiedI18n } from '@/composables/shared/useUnifiedI18n';
 import { MessageActions } from '@/shared/messaging/core/MessageActions.js';
@@ -495,11 +525,36 @@ const currentUrlStr = computed(() => typeof window !== 'undefined' ? window.loca
 
 const {
   isAutoTranslateToggleVisible,
-  isAutoTranslateToggleActive,
-  isAutoTranslateToggleDisabled,
-  autoTranslateToggleTitle,
-  toggleAutoTranslateForCurrentPage
+  isActive,
+  hasPageRule,
+  hasSiteRule,
+  siteScopeAvailable,
+  showManageRules,
+  scopeActions,
+  openManageRules,
 } = useAutoTranslateRules({ currentUrl: currentUrlStr });
+const scopeMenuOpen = ref(false);
+const scopeTrigger = ref(null);
+const firstScopeAction = ref(null);
+const focusRefTarget = (templateRef) => {
+  const target = Array.isArray(templateRef.value) ? templateRef.value[0] : templateRef.value;
+  target?.focus();
+};
+const toggleScopeDisclosure = async () => {
+  scopeMenuOpen.value = !scopeMenuOpen.value;
+  if (scopeMenuOpen.value) {
+    await nextTick();
+    focusRefTarget(firstScopeAction);
+  }
+};
+const onScopeGroupKeydown = () => {
+  if (!scopeMenuOpen.value) return;
+  scopeMenuOpen.value = false;
+  focusRefTarget(scopeTrigger);
+};
+watch(isMenuOpen, (open) => {
+  if (!open) scopeMenuOpen.value = false;
+});
 
 const menuItems = computed(() => {
   const items = [];
@@ -585,10 +640,8 @@ const menuItems = computed(() => {
   const isPageTranslationAllowed = allowedFeatures.value.pageTranslation;
 
   const pageSecondaryAction = isAutoTranslateToggleVisible.value ? {
-    active: isAutoTranslateToggleActive.value,
-    disabled: isAutoTranslateToggleDisabled.value,
-    title: autoTranslateToggleTitle.value,
-    handler: () => toggleAutoTranslateForCurrentPage()
+    active: isActive.value,
+    title: t('auto_translate_scope_menu_label', 'Auto-translate scope'),
   } : null;
 
   if (status.isAuto || status.isTranslating) {
