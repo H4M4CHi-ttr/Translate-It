@@ -52,6 +52,7 @@ const CONTEXT_MENU_SETTING_KEYS = [
   'ENABLE_SCREEN_CAPTURE',
   'CONTEXT_MENU_VISIBILITY',
   'TRANSLATION_API',
+  'MODE_PROVIDERS',
   'DEBUG_MODE',
   'HIDDEN_PROVIDERS',
   'DEEPL_API_KEY',
@@ -66,6 +67,13 @@ const CONTEXT_MENU_SETTING_KEYS = [
   'WEBAI_API_URL',
   'WEBAI_API_MODEL'
 ];
+
+// Match PageTranslationSettingsLoader's configured provider selection.
+// Whole Page does not use getEffectiveProviderAsync's capability fallback.
+function getConfiguredPageProvider(settings) {
+  return settings.MODE_PROVIDERS?.[TranslationMode.Page]
+    || (settings.TRANSLATION_API ?? CONFIG.TRANSLATION_API);
+}
 
 // --- Get API Providers from Registry ---
 async function getApiProviders(settings = {}) {
@@ -427,10 +435,8 @@ export class ContextMenuManager extends ResourceTracker {
       // Prepare all required data before removing working menus.
       const settings = await storageManager.get(CONTEXT_MENU_SETTING_KEYS, false);
       const isExtensionEnabled = settings.EXTENSION_ENABLED !== false;
-      const [selectElementApi, pageApi] = await Promise.all([
-        getEffectiveProviderAsync(TranslationMode.Select_Element),
-        getEffectiveProviderAsync(TranslationMode.Page),
-      ]);
+      const selectElementApi = await getEffectiveProviderAsync(TranslationMode.Select_Element);
+      const pageApi = getConfiguredPageProvider(settings);
       const provider = findProviderById(selectElementApi);
       const isBulkSupported = provider?.features?.includes('bulk') ?? false;
       const isSelectElementEnabled = isExtensionEnabled &&
@@ -890,12 +896,14 @@ export class ContextMenuManager extends ResourceTracker {
     const settings = await storageManager.get([
       'EXTENSION_ENABLED',
       'WHOLE_PAGE_TRANSLATION_ENABLED',
+      'TRANSLATION_API',
+      'MODE_PROVIDERS',
     ], false);
     if (settings.EXTENSION_ENABLED === false) return;
 
     if (action === MessageActions.PAGE_TRANSLATE) {
       if (settings.WHOLE_PAGE_TRANSLATION_ENABLED === false) return;
-      const provider = await getEffectiveProviderAsync(TranslationMode.Page);
+      const provider = getConfiguredPageProvider(settings);
       if (!findProviderById(provider)?.features?.includes('bulk')) return;
     }
 

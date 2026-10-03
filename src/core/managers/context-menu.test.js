@@ -151,6 +151,7 @@ const CONTEXT_MENU_SETTING_KEYS = [
   'ENABLE_SCREEN_CAPTURE',
   'CONTEXT_MENU_VISIBILITY',
   'TRANSLATION_API',
+  'MODE_PROVIDERS',
   'DEBUG_MODE',
   'HIDDEN_PROVIDERS',
   'DEEPL_API_KEY',
@@ -191,6 +192,7 @@ const createSettings = (overrides = {}) => ({
   ENABLE_SCREEN_CAPTURE: true,
   CONTEXT_MENU_VISIBILITY: { ...CONTEXT_MENU_VISIBILITY },
   TRANSLATION_API: 'googlev2',
+  MODE_PROVIDERS: {},
   DEBUG_MODE: false,
   HIDDEN_PROVIDERS: [],
   OPENAI_API_KEY: 'configured-key',
@@ -218,6 +220,26 @@ const inactivePageStatus = () => ({
   isAutoTranslating: false,
   translatedCount: 0
 });
+
+const unsupportedPageProviders = [
+  ['mode-specific', { MODE_PROVIDERS: { 'page-translation-batch': 'vajehyab' } }],
+  ['global', { TRANSLATION_API: 'vajehyab' }]
+];
+
+const useRealProviderResolution = async (readSettings) => {
+  const config = await vi.importActual('@/shared/config/config.js');
+  mocks.storageManager.get.mockImplementation(async (keys) => {
+    const settings = readSettings();
+    const defaults = Array.isArray(keys) ? {} : keys;
+    const requestedKeys = Array.isArray(keys) ? keys : Object.keys(keys);
+    return Object.fromEntries(requestedKeys.map(key => [
+      key,
+      Object.hasOwn(settings, key) ? settings[key] : defaults[key]
+    ]));
+  });
+  mocks.getEffectiveProviderAsync.mockImplementation(config.getEffectiveProviderAsync);
+  return config;
+};
 
 describe('ContextMenuManager keyed storage reads', () => {
   let manager;
@@ -656,9 +678,11 @@ describe('ContextMenuManager keyed storage reads', () => {
   });
 
   it('uses the Whole Page provider independently of the Select Element provider', async () => {
-    mocks.getEffectiveProviderAsync.mockImplementation(async (mode) => (
-      mode === 'page-translation-batch' ? 'googlev2' : 'vajehyab'
-    ));
+    mocks.storageManager.get.mockResolvedValue(createSettings({
+      TRANSLATION_API: 'vajehyab',
+      MODE_PROVIDERS: { 'page-translation-batch': 'googlev2' }
+    }));
+    mocks.getEffectiveProviderAsync.mockResolvedValue('vajehyab');
 
     await manager._setupMenusInternal();
 
@@ -667,9 +691,9 @@ describe('ContextMenuManager keyed storage reads', () => {
   });
 
   it('keeps restore available when the Whole Page provider lacks bulk support', async () => {
-    mocks.getEffectiveProviderAsync.mockImplementation(async (mode) => (
-      mode === 'page-translation-batch' ? 'vajehyab' : 'googlev2'
-    ));
+    mocks.storageManager.get.mockResolvedValue(createSettings({
+      MODE_PROVIDERS: { 'page-translation-batch': 'vajehyab' }
+    }));
 
     mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
     mocks.handlePageTranslation.mockResolvedValue({ ...inactivePageStatus(), isTranslated: true });
@@ -679,6 +703,31 @@ describe('ContextMenuManager keyed storage reads', () => {
     expect(getCreatedMenu('restore-page')).toBeDefined();
     expect(getCreatedMenu('translate-with-select-element')).toBeDefined();
     expect(getVisiblePageCommands()).toEqual(['restore-page']);
+  });
+
+  it.each(unsupportedPageProviders)('hides page translation with an unsupported %s provider despite capability fallback', async (_source, overrides) => {
+    const settings = createSettings(overrides);
+    const config = await useRealProviderResolution(() => settings);
+    expect(await config.getEffectiveProviderAsync(config.TranslationMode.Page)).toBe('googlev2');
+
+    await manager._setupMenusInternal();
+
+    expect(getCreatedMenu('translate-page')).toBeUndefined();
+    expect(getCreatedMenu('restore-page')).toBeDefined();
+    expect(getCreatedMenu('translate-with-select-element')).toBeDefined();
+  });
+
+  it.each(unsupportedPageProviders)('rejects stale translate clicks with an unsupported %s provider despite capability fallback', async (_source, overrides) => {
+    let settings = createSettings();
+    const config = await useRealProviderResolution(() => settings);
+    await manager._setupMenusInternal();
+    expect(getCreatedMenu('translate-page')).toBeDefined();
+
+    settings = createSettings(overrides);
+    expect(await config.getEffectiveProviderAsync(config.TranslationMode.Page)).toBe('googlev2');
+    await manager.handleMenuClick({ menuItemId: 'translate-page' }, { id: 42 });
+
+    expect(mocks.handlePageTranslation).not.toHaveBeenCalled();
   });
 
   it('enables new whole-page commands for older visibility settings', async () => {
@@ -760,7 +809,9 @@ describe('ContextMenuManager keyed storage reads', () => {
   });
 
   it('does not translate with a newly selected provider without bulk support', async () => {
-    mocks.getEffectiveProviderAsync.mockResolvedValue('vajehyab');
+    mocks.storageManager.get.mockResolvedValue(createSettings({
+      MODE_PROVIDERS: { 'page-translation-batch': 'vajehyab' }
+    }));
 
     await manager.handleMenuClick({ menuItemId: 'translate-page' }, { id: 42 });
 
@@ -768,8 +819,10 @@ describe('ContextMenuManager keyed storage reads', () => {
   });
 
   it('restores existing translations after disabling whole-page translation and switching providers', async () => {
-    mocks.storageManager.get.mockResolvedValue(createSettings({ WHOLE_PAGE_TRANSLATION_ENABLED: false }));
-    mocks.getEffectiveProviderAsync.mockResolvedValue('vajehyab');
+    mocks.storageManager.get.mockResolvedValue(createSettings({
+      WHOLE_PAGE_TRANSLATION_ENABLED: false,
+      MODE_PROVIDERS: { 'page-translation-batch': 'vajehyab' }
+    }));
 
     await manager.handleMenuClick({ menuItemId: 'restore-page' }, { id: 42 });
 
