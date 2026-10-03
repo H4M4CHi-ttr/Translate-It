@@ -29,6 +29,8 @@ const logger = getScopedLogger(LOG_COMPONENTS.CORE, 'context-menu');
 
 // --- Constants for Menu Item IDs ---
 const PAGE_CONTEXT_MENU_ID = "translate-with-select-element";
+const PAGE_CONTEXT_TRANSLATE_ID = "translate-page";
+const PAGE_CONTEXT_RESTORE_ID = "restore-page";
 const PAGE_CONTEXT_PDF_ID = "open-pdf-with-link";
 const ACTION_TRANSLATE_ELEMENT_ID = "action-translate-element";
 const SCREEN_CAPTURE_MENU_ID = "screen-capture";
@@ -46,9 +48,11 @@ const API_PROVIDER_ITEM_ID_PREFIX = "api-provider-";
 const CONTEXT_MENU_SETTING_KEYS = [
   'EXTENSION_ENABLED',
   'TRANSLATE_WITH_SELECT_ELEMENT',
+  'WHOLE_PAGE_TRANSLATION_ENABLED',
   'ENABLE_SCREEN_CAPTURE',
   'CONTEXT_MENU_VISIBILITY',
   'TRANSLATION_API',
+  'MODE_PROVIDERS',
   'DEBUG_MODE',
   'HIDDEN_PROVIDERS',
   'DEEPL_API_KEY',
@@ -63,6 +67,13 @@ const CONTEXT_MENU_SETTING_KEYS = [
   'WEBAI_API_URL',
   'WEBAI_API_MODEL'
 ];
+
+// Match PageTranslationSettingsLoader's configured provider selection.
+// Whole Page does not use getEffectiveProviderAsync's capability fallback.
+function getConfiguredPageProvider(settings) {
+  return settings.MODE_PROVIDERS?.[TranslationMode.Page]
+    || (settings.TRANSLATION_API ?? CONFIG.TRANSLATION_API);
+}
 
 // --- Get API Providers from Registry ---
 async function getApiProviders(settings = {}) {
@@ -305,6 +316,11 @@ export class ContextMenuManager extends ResourceTracker {
     this.initialized = false;
     this.createdMenus = new Set();
     this.storageListener = null;
+    this.pageMenuListeners = [];
+    this.pageTranslationStates = new Map();
+    this.activePageTabId = null;
+    this._pageMenuRefreshVersion = 0;
+    this._pageMenuUpdatePromise = Promise.resolve();
   }
 
   /**
@@ -333,6 +349,11 @@ export class ContextMenuManager extends ResourceTracker {
       // Register storage listener only if it has not already been registered
       if (!this.storageListener) {
         this.registerStorageListener();
+      }
+
+      if (!this.pageMenuListeners.length) {
+        this.registerPageMenuListeners();
+        await this.refreshActivePageMenu();
       }
 
       this.initialized = true;
@@ -396,6 +417,10 @@ export class ContextMenuManager extends ResourceTracker {
       this._pendingSetupPromise = null;
       this._needsRerun = false;
     }
+
+    if (this.pageMenuListeners.length) {
+      await this.refreshActivePageMenu();
+    }
   }
 
   /**
@@ -411,14 +436,22 @@ export class ContextMenuManager extends ResourceTracker {
       const settings = await storageManager.get(CONTEXT_MENU_SETTING_KEYS, false);
       const isExtensionEnabled = settings.EXTENSION_ENABLED !== false;
       const selectElementApi = await getEffectiveProviderAsync(TranslationMode.Select_Element);
+      const pageApi = getConfiguredPageProvider(settings);
       const provider = findProviderById(selectElementApi);
       const isBulkSupported = provider?.features?.includes('bulk') ?? false;
       const isSelectElementEnabled = isExtensionEnabled &&
                                    (settings.TRANSLATE_WITH_SELECT_ELEMENT !== false) &&
                                    isBulkSupported;
       const isScreenCaptureEnabled = isExtensionEnabled && (settings.ENABLE_SCREEN_CAPTURE !== false);
+      const isPageTranslationEnabled = isExtensionEnabled &&
+                                      (settings.WHOLE_PAGE_TRANSLATION_ENABLED !== false) &&
+                                      (findProviderById(pageApi)?.features?.includes('bulk') ?? false);
       const visibility = settings.CONTEXT_MENU_VISIBILITY || CONFIG.CONTEXT_MENU_VISIBILITY;
+      const isPageMenuVisible = isExtensionEnabled && visibility.PAGE_CONTEXT_PAGE_TRANSLATION !== false;
       const commands = await browser.commands.getAll();
+
+      // Finish any in-flight visibility update before replacing its menu IDs.
+      await this._pageMenuUpdatePromise;
 
       // Clear existing menus first and wait for completion
       // Increase delay to ensure removeAll() fully completes before creating new menus
@@ -654,6 +687,37 @@ export class ContextMenuManager extends ResourceTracker {
         logger.error("Error creating action context menus:", e);
       }
 
+      // Create whole-page commands last so the visible command stays at the
+      // bottom of the extension's page context menu in either translation state.
+      const needsRestore = this.pageTranslationStates.get(this.activePageTabId)?.needsRestore === true;
+      if (isPageMenuVisible && isPageTranslationEnabled) {
+        try {
+          await this.createMenu({
+            id: PAGE_CONTEXT_TRANSLATE_ID,
+            title: (await getTranslationString("context_menu_translate_page", locale)) || "Translate This Page",
+            contexts: ["page", "selection", "link", "image", "video", "audio"],
+            visible: !needsRestore,
+          });
+        } catch (e) {
+          logger.error("Error creating page translation context menu:", e);
+        }
+      }
+
+      // Keep restore available even after disabling page translation or changing
+      // to a provider without bulk support, so existing translations can be undone.
+      if (isPageMenuVisible) {
+        try {
+          await this.createMenu({
+            id: PAGE_CONTEXT_RESTORE_ID,
+            title: (await getTranslationString("context_menu_restore_page", locale)) || "Restore Original Page",
+            contexts: ["page", "selection", "link", "image", "video", "audio"],
+            visible: needsRestore,
+          });
+        } catch (e) {
+          logger.error("Error creating page restore context menu:", e);
+        }
+      }
+
       logger.info("Default context menus created");
     } catch (error) {
       logger.error("Failed to setup default menus:", error);
@@ -823,6 +887,164 @@ export class ContextMenuManager extends ResourceTracker {
   }
 
   /**
+   * Route a whole-page command through the canonical Background handler.
+   * The clicked tab is authoritative even if the active tab changes meanwhile.
+   */
+  async _handlePageCommand(action, tab) {
+    if (!Number.isInteger(tab?.id) || tab.id < 0) return;
+
+    const settings = await storageManager.get([
+      'EXTENSION_ENABLED',
+      'WHOLE_PAGE_TRANSLATION_ENABLED',
+      'TRANSLATION_API',
+      'MODE_PROVIDERS',
+    ], false);
+    if (settings.EXTENSION_ENABLED === false) return;
+
+    if (action === MessageActions.PAGE_TRANSLATE) {
+      if (settings.WHOLE_PAGE_TRANSLATION_ENABLED === false) return;
+      const provider = getConfiguredPageProvider(settings);
+      if (!findProviderById(provider)?.features?.includes('bulk')) return;
+    }
+
+    const { handlePageTranslation } = await import('@/core/background/handlers/page-translation/handlePageTranslation.js');
+    const result = await handlePageTranslation({ action, context: 'context-menu' }, { tab });
+    if (result?.success === false) {
+      logger.warn('Page context menu command was not completed', { action, tabId: tab.id, result });
+    }
+    await this.refreshActivePageMenu();
+  }
+
+  /**
+   * Observe authoritative top-frame aggregates without responding to messages.
+   * Frame-local completion/restore events cannot determine the whole tab state.
+   */
+  registerPageMenuListeners() {
+    if (this.pageMenuListeners.length) return;
+
+    const listen = (event, listener) => {
+      if (!event?.addListener) return;
+      event.addListener(listener);
+      this.pageMenuListeners.push([event, listener]);
+    };
+
+    try {
+      listen(browser.runtime.onMessage, (message, sender) => {
+        const tabId = sender?.tab?.id;
+        if (
+          !Number.isInteger(tabId) || tabId < 0 || sender.frameId !== 0
+          || message?.data?.isAggregated !== true
+          || !MessageActions.PAGE_TRANSLATION_AGGREGATE_ACTIONS.includes(message.action)
+        ) return false;
+
+        const previousState = this.pageTranslationStates.get(tabId);
+        const needsRestore = this.hasRestorablePageState(message.data);
+        this.pageTranslationStates.set(tabId, { needsRestore });
+        if (tabId === this.activePageTabId && previousState?.needsRestore !== needsRestore) {
+          void this.syncPageMenuVisibility();
+        }
+        return false;
+      });
+      listen(browser.tabs.onActivated, () => { void this.refreshActivePageMenu(); });
+      listen(browser.windows?.onFocusChanged, (windowId) => {
+        if (windowId !== -1) void this.refreshActivePageMenu();
+      });
+      listen(browser.tabs.onUpdated, (tabId, changes) => {
+        if (changes.status === 'loading') {
+          this.pageTranslationStates.delete(tabId);
+          if (tabId === this.activePageTabId) {
+            this._pageMenuRefreshVersion++;
+            void this.syncPageMenuVisibility();
+          }
+        } else if (tabId === this.activePageTabId && (changes.status === 'complete' || changes.url)) {
+          void this.refreshActivePageMenu();
+        }
+      });
+      listen(browser.tabs.onRemoved, (tabId) => {
+        this.pageTranslationStates.delete(tabId);
+        if (tabId === this.activePageTabId) {
+          this.activePageTabId = null;
+          this._pageMenuRefreshVersion++;
+          void this.syncPageMenuVisibility();
+        }
+      });
+
+      // Firefox can also refresh the menu for the exact tab where it opens.
+      // Chrome relies on the tab/window and translation lifecycle listeners.
+      const menus = browser.menus || browser.contextMenus;
+      listen(menus.onShown, (_info, tab) => {
+        void this.refreshActivePageMenu(tab)
+          .then(() => menus.refresh?.())
+          .catch(error => logger.debug('Could not refresh shown page menu:', error));
+      });
+    } catch (error) {
+      this.removePageMenuListeners();
+      throw error;
+    }
+  }
+
+  removePageMenuListeners() {
+    for (const [event, listener] of this.pageMenuListeners) {
+      event.removeListener(listener);
+    }
+    this.pageMenuListeners = [];
+  }
+
+  hasRestorablePageState(status) {
+    return status.isTranslating === true || status.isTranslated === true
+      || status.isAutoTranslating === true || status.translatedCount > 0;
+  }
+
+  /**
+   * Recover a tab's state on activation/rebuild, including background restarts.
+   * Unknown status preserves the last known state; late probes cannot overwrite
+   * newer lifecycle events, navigation, or a switch to another tab.
+   */
+  async refreshActivePageMenu(tab = null) {
+    if (!this.createdMenus.has(PAGE_CONTEXT_TRANSLATE_ID) && !this.createdMenus.has(PAGE_CONTEXT_RESTORE_ID)) return;
+
+    const version = ++this._pageMenuRefreshVersion;
+    try {
+      const activeTab = tab || (await browser.tabs.query({ active: true, currentWindow: true }))[0];
+      if (version !== this._pageMenuRefreshVersion) return;
+      this.activePageTabId = Number.isInteger(activeTab?.id) && activeTab.id >= 0 ? activeTab.id : null;
+      await this.syncPageMenuVisibility();
+      if (this.activePageTabId === null) return;
+
+      const tabId = this.activePageTabId;
+      const previousState = this.pageTranslationStates.get(tabId);
+      const { handlePageTranslation } = await import('@/core/background/handlers/page-translation/handlePageTranslation.js');
+      const status = await handlePageTranslation(
+        { action: MessageActions.PAGE_TRANSLATE_GET_STATUS, context: 'context-menu' },
+        { tab: activeTab }
+      );
+      if (version !== this._pageMenuRefreshVersion || previousState !== this.pageTranslationStates.get(tabId)) return;
+      if (status?.success) {
+        this.pageTranslationStates.set(tabId, { needsRestore: this.hasRestorablePageState(status) });
+        await this.syncPageMenuVisibility();
+      }
+    } catch (error) {
+      logger.debug('Could not refresh page context menu state:', error);
+    }
+  }
+
+  /**
+   * Hide the previous command before revealing the other one. Serializing
+   * updates keeps rapid tab/lifecycle changes from showing both commands.
+   */
+  syncPageMenuVisibility() {
+    this._pageMenuUpdatePromise = this._pageMenuUpdatePromise.then(async () => {
+      if (this._menuSetupLock) return;
+      const needsRestore = this.pageTranslationStates.get(this.activePageTabId)?.needsRestore === true;
+      const hiddenId = needsRestore ? PAGE_CONTEXT_TRANSLATE_ID : PAGE_CONTEXT_RESTORE_ID;
+      const visibleId = needsRestore ? PAGE_CONTEXT_RESTORE_ID : PAGE_CONTEXT_TRANSLATE_ID;
+      if (this.createdMenus.has(hiddenId)) await this.updateMenu(hiddenId, { visible: false });
+      if (this.createdMenus.has(visibleId)) await this.updateMenu(visibleId, { visible: true });
+    }).catch(error => logger.error('Failed to sync page context menu visibility:', error));
+    return this._pageMenuUpdatePromise;
+  }
+
+  /**
    * Handle context menu click
    * @param {Object} info - Click information
    * @param {Object} tab - Tab information
@@ -862,6 +1084,14 @@ export class ContextMenuManager extends ResourceTracker {
 
       // --- Handle specific menu items ---
       switch (info.menuItemId) {
+        case PAGE_CONTEXT_TRANSLATE_ID:
+          await this._handlePageCommand(MessageActions.PAGE_TRANSLATE, tab);
+          break;
+
+        case PAGE_CONTEXT_RESTORE_ID:
+          await this._handlePageCommand(MessageActions.PAGE_RESTORE, tab);
+          break;
+
         case PAGE_CONTEXT_MENU_ID:
           await this._activateSelectElement(tab);
           break;
@@ -1014,6 +1244,7 @@ export class ContextMenuManager extends ResourceTracker {
             const relevantKeys = [
               'TRANSLATION_API', 
               'TRANSLATE_WITH_SELECT_ELEMENT', 
+              'WHOLE_PAGE_TRANSLATION_ENABLED',
               'ENABLE_SCREEN_CAPTURE',
               'MODE_PROVIDERS', 
               'EXTENSION_ENABLED', 
@@ -1082,6 +1313,11 @@ export class ContextMenuManager extends ResourceTracker {
     logger.info("Cleaning up context menu manager");
 
     try {
+      this.removePageMenuListeners();
+      this._pageMenuRefreshVersion++;
+      this.activePageTabId = null;
+      this.pageTranslationStates.clear();
+      await this._pageMenuUpdatePromise;
       await this.clearAllMenus();
       
       // Remove storage listener
