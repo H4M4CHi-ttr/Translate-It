@@ -470,36 +470,6 @@ export class ContextMenuManager extends ResourceTracker {
       this.createdMenus.clear();
       logger.debug("[ContextMenuManager] Cleared existing menus and verified");
 
-      // Both commands exist, but only the one appropriate for this tab is visible.
-      const needsRestore = this.pageTranslationStates.get(this.activePageTabId)?.needsRestore === true;
-      if (isPageMenuVisible && isPageTranslationEnabled) {
-        try {
-          await this.createMenu({
-            id: PAGE_CONTEXT_TRANSLATE_ID,
-            title: (await getTranslationString("context_menu_translate_page", locale)) || "Translate This Page",
-            contexts: ["page", "selection", "link", "image", "video", "audio"],
-            visible: !needsRestore,
-          });
-        } catch (e) {
-          logger.error("Error creating page translation context menu:", e);
-        }
-      }
-
-      // Keep restore available even after disabling page translation or changing
-      // to a provider without bulk support, so existing translations can be undone.
-      if (isPageMenuVisible) {
-        try {
-          await this.createMenu({
-            id: PAGE_CONTEXT_RESTORE_ID,
-            title: (await getTranslationString("context_menu_restore_page", locale)) || "Restore Original Page",
-            contexts: ["page", "selection", "link", "image", "video", "audio"],
-            visible: needsRestore,
-          });
-        } catch (e) {
-          logger.error("Error creating page restore context menu:", e);
-        }
-      }
-
       // --- 1. Create Page Context Menu (Select Element) ---
       if (isSelectElementEnabled && visibility.PAGE_CONTEXT_SELECT_ELEMENT) {
         try {
@@ -709,6 +679,37 @@ export class ContextMenuManager extends ResourceTracker {
         logger.debug("Action context menus created successfully.");
       } catch (e) {
         logger.error("Error creating action context menus:", e);
+      }
+
+      // Create whole-page commands last so the visible command stays at the
+      // bottom of the extension's page context menu in either translation state.
+      const needsRestore = this.pageTranslationStates.get(this.activePageTabId)?.needsRestore === true;
+      if (isPageMenuVisible && isPageTranslationEnabled) {
+        try {
+          await this.createMenu({
+            id: PAGE_CONTEXT_TRANSLATE_ID,
+            title: (await getTranslationString("context_menu_translate_page", locale)) || "Translate This Page",
+            contexts: ["page", "selection", "link", "image", "video", "audio"],
+            visible: !needsRestore,
+          });
+        } catch (e) {
+          logger.error("Error creating page translation context menu:", e);
+        }
+      }
+
+      // Keep restore available even after disabling page translation or changing
+      // to a provider without bulk support, so existing translations can be undone.
+      if (isPageMenuVisible) {
+        try {
+          await this.createMenu({
+            id: PAGE_CONTEXT_RESTORE_ID,
+            title: (await getTranslationString("context_menu_restore_page", locale)) || "Restore Original Page",
+            contexts: ["page", "selection", "link", "image", "video", "audio"],
+            visible: needsRestore,
+          });
+        } catch (e) {
+          logger.error("Error creating page restore context menu:", e);
+        }
       }
 
       logger.info("Default context menus created");

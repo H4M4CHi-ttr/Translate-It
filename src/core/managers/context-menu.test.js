@@ -331,6 +331,15 @@ describe('ContextMenuManager keyed storage reads', () => {
     expect(mocks.getTranslationString).toHaveBeenCalledWith('context_menu_translate_page', 'ja');
     expect(mocks.getTranslationString).toHaveBeenCalledWith('context_menu_restore_page', 'ja');
     expect(getVisiblePageCommands()).toEqual(['translate-page']);
+    expect(getCreatedMenus()
+      .filter(menu => menu.contexts?.some(context => ['page', 'selection', 'link', 'image', 'video', 'audio'].includes(context)))
+      .map(menu => menu.id)).toEqual([
+      'translate-with-select-element',
+      'open-pdf-with-link',
+      'screen-capture-page',
+      'translate-page',
+      'restore-page'
+    ]);
   });
 
   it.each([
