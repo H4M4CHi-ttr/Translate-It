@@ -22,9 +22,9 @@ Once the mode is active, hover over any part of the page to highlight it. Click 
 
 Right-click anywhere on a web page and choose **Translate This Page**. This uses the Whole Page provider, target language, lazy-loading settings, and token-usage confirmation configured in Options, and includes supported frames in the clicked tab.
 
-Choose **Restore Original Page** to stop page translation and restore the original content. Restore remains available after disabling Whole Page Translation or switching to a provider without bulk support, so existing page translations can still be undone.
+While page translation is running or translated content remains, the menu shows **Restore Original Page** instead. Choose it to stop page translation and restore the original content; the menu then returns to **Translate This Page**. The command follows the state of the current tab, including translation or restore triggered from the popup or page controls. Restore remains available for translated tabs after disabling Whole Page Translation or switching to a provider without bulk support.
 
-Both entries are enabled by default. To hide them, turn off **Show in context menu** under **Options → Activation → Whole Page Translation**. The translation entry is also hidden when the extension or Whole Page Translation is disabled, or the Whole Page provider does not support bulk translation. Disabling the extension hides both entries.
+This menu is enabled by default and shows only one of the two commands at a time. To hide it, turn off **Show in context menu** under **Options → Activation → Whole Page Translation**. The translation command is also hidden when Whole Page Translation is disabled or the Whole Page provider does not support bulk translation. Disabling the extension hides both commands.
 
 ### 4. Desktop FAB Menu (Quick Access)
 On desktop browsers, a floating action button (FAB) appears on the right side of the page. 

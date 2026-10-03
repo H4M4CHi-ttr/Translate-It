@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
+  const menuState = new Map();
+  const createEvent = () => ({ addListener: vi.fn(), removeListener: vi.fn() });
   const browser = {
     contextMenus: {
       removeAll: vi.fn().mockResolvedValue(undefined),
@@ -8,7 +10,8 @@ const mocks = vi.hoisted(() => {
       create: vi.fn((menu, callback) => {
         callback?.();
         return menu.id;
-      })
+      }),
+      update: vi.fn().mockResolvedValue(undefined)
     },
     commands: {
       getAll: vi.fn().mockResolvedValue([]),
@@ -17,6 +20,7 @@ const mocks = vi.hoisted(() => {
     runtime: {
       sendMessage: vi.fn(),
       getURL: vi.fn((path) => path),
+      onMessage: createEvent(),
       getBrowserInfo: vi.fn().mockResolvedValue({ name: 'Chrome' })
     },
     storage: {
@@ -28,12 +32,17 @@ const mocks = vi.hoisted(() => {
     tabs: {
       query: vi.fn().mockResolvedValue([]),
       create: vi.fn().mockResolvedValue(undefined),
-      sendMessage: vi.fn().mockResolvedValue(undefined)
-    }
+      sendMessage: vi.fn().mockResolvedValue(undefined),
+      onActivated: createEvent(),
+      onUpdated: createEvent(),
+      onRemoved: createEvent()
+    },
+    windows: { onFocusChanged: createEvent() }
   };
 
   return {
     browser,
+    menuState,
     logger: {
       debug: vi.fn(),
       info: vi.fn(),
@@ -199,12 +208,35 @@ const getCreatedMenu = (id) => getCreatedMenus().find(menu => menu.id === id);
 const getActionMenus = () => getCreatedMenus()
   .filter(menu => menu.contexts?.includes('action'));
 
+const getVisiblePageCommands = () => ['translate-page', 'restore-page']
+  .filter(id => mocks.menuState.has(id) && mocks.menuState.get(id).visible !== false);
+
+const inactivePageStatus = () => ({
+  success: true,
+  isTranslating: false,
+  isTranslated: false,
+  isAutoTranslating: false,
+  translatedCount: 0
+});
+
 describe('ContextMenuManager keyed storage reads', () => {
   let manager;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.menuState.clear();
     delete globalThis.backgroundService;
+    delete mocks.browser.menus;
+    mocks.browser.tabs.query.mockResolvedValue([]);
+    mocks.browser.contextMenus.removeAll.mockImplementation(async () => { mocks.menuState.clear(); });
+    mocks.browser.contextMenus.create.mockImplementation((menu, callback) => {
+      mocks.menuState.set(menu.id, { ...menu });
+      callback?.();
+      return menu.id;
+    });
+    mocks.browser.contextMenus.update.mockImplementation(async (id, changes) => {
+      Object.assign(mocks.menuState.get(id), changes);
+    });
     mocks.browser.commands.openShortcutSettings.mockResolvedValue(undefined);
     mocks.browser.runtime.getBrowserInfo.mockResolvedValue({ name: 'Chrome' });
     mocks.getTranslationString.mockImplementation((key) => key);
@@ -281,21 +313,310 @@ describe('ContextMenuManager keyed storage reads', () => {
     expect(menuIds).not.toContain('screen-capture-action');
   });
 
-  it('creates localized whole-page commands for all supported page contexts', async () => {
+  it('initially shows only the localized translate command for all supported page contexts', async () => {
     await manager._setupMenusInternal('ja');
 
     expect(getCreatedMenu('translate-page')).toEqual({
       id: 'translate-page',
       title: 'context_menu_translate_page',
-      contexts: ['page', 'selection', 'link', 'image', 'video', 'audio']
+      contexts: ['page', 'selection', 'link', 'image', 'video', 'audio'],
+      visible: true
     });
     expect(getCreatedMenu('restore-page')).toEqual({
       id: 'restore-page',
       title: 'context_menu_restore_page',
-      contexts: ['page', 'selection', 'link', 'image', 'video', 'audio']
+      contexts: ['page', 'selection', 'link', 'image', 'video', 'audio'],
+      visible: false
     });
     expect(mocks.getTranslationString).toHaveBeenCalledWith('context_menu_translate_page', 'ja');
     expect(mocks.getTranslationString).toHaveBeenCalledWith('context_menu_restore_page', 'ja');
+    expect(getVisiblePageCommands()).toEqual(['translate-page']);
+  });
+
+  it.each([
+    ['translation in progress', { isTranslating: true }],
+    ['translated page', { isTranslated: true }],
+    ['auto-translation waiting for new content', { isAutoTranslating: true }],
+    ['partial translation after an error', { translatedCount: 3 }]
+  ])('recovers %s on initialization and shows only restore', async (_name, state) => {
+    const tab = { id: 42 };
+    mocks.browser.tabs.query.mockResolvedValue([tab]);
+    mocks.handlePageTranslation.mockResolvedValue({ ...inactivePageStatus(), ...state });
+
+    await manager.initialize();
+
+    expect(mocks.handlePageTranslation).toHaveBeenCalledWith(
+      { action: MessageActions.PAGE_TRANSLATE_GET_STATUS, context: 'context-menu' },
+      { tab }
+    );
+    expect(getVisiblePageCommands()).toEqual(['restore-page']);
+  });
+
+  it('follows translation and restore from other controls without consuming their messages', async () => {
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    await manager.initialize();
+    const listener = mocks.browser.runtime.onMessage.addListener.mock.calls[0][0];
+    const sender = { tab: { id: 42 }, frameId: 0 };
+
+    expect(listener({
+      action: MessageActions.PAGE_TRANSLATE_START,
+      data: { isAggregated: true, isTranslating: true }
+    }, sender)).toBe(false);
+    await manager._pageMenuUpdatePromise;
+    expect(getVisiblePageCommands()).toEqual(['restore-page']);
+
+    listener({
+      action: MessageActions.PAGE_RESTORE_COMPLETE,
+      data: { ...inactivePageStatus(), isAggregated: true }
+    }, sender);
+    await manager._pageMenuUpdatePromise;
+    expect(getVisiblePageCommands()).toEqual(['translate-page']);
+  });
+
+  it.each([
+    ['child frame', { tab: { id: 42 }, frameId: 7 }, { isAggregated: true }],
+    ['frame-local event', { tab: { id: 42 }, frameId: 0 }, { isAggregated: false }],
+    ['extension UI without a tab', {}, { isAggregated: true }]
+  ])('ignores %s instead of treating it as whole-tab state', async (_name, sender, data) => {
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    await manager.initialize();
+    const listener = mocks.browser.runtime.onMessage.addListener.mock.calls[0][0];
+    mocks.browser.contextMenus.update.mockClear();
+
+    expect(listener({
+      action: MessageActions.PAGE_TRANSLATE_COMPLETE,
+      data: { ...data, isTranslated: true, translatedCount: 2 }
+    }, sender)).toBe(false);
+    await manager._pageMenuUpdatePromise;
+
+    expect(mocks.browser.contextMenus.update).not.toHaveBeenCalled();
+    expect(getVisiblePageCommands()).toEqual(['translate-page']);
+  });
+
+  it('keeps partial translations restorable and returns to translate after an all-failed attempt', async () => {
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    await manager.initialize();
+    const listener = mocks.browser.runtime.onMessage.addListener.mock.calls[0][0];
+    const sender = { tab: { id: 42 }, frameId: 0 };
+
+    listener({
+      action: MessageActions.PAGE_TRANSLATE_ERROR,
+      data: { ...inactivePageStatus(), isAggregated: true, translatedCount: 2, failedCount: 1 }
+    }, sender);
+    await manager._pageMenuUpdatePromise;
+    expect(getVisiblePageCommands()).toEqual(['restore-page']);
+
+    listener({
+      action: MessageActions.PAGE_TRANSLATE_COMPLETE,
+      data: { ...inactivePageStatus(), isAggregated: true, failedCount: 3 }
+    }, sender);
+    await manager._pageMenuUpdatePromise;
+    expect(getVisiblePageCommands()).toEqual(['translate-page']);
+  });
+
+  it('keeps stopped auto-translation restorable while translated nodes remain', async () => {
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    await manager.initialize();
+    const listener = mocks.browser.runtime.onMessage.addListener.mock.calls[0][0];
+
+    listener({
+      action: MessageActions.PAGE_AUTO_RESTORE_COMPLETE,
+      data: { ...inactivePageStatus(), isAggregated: true, translatedCount: 4 }
+    }, { tab: { id: 42 }, frameId: 0 });
+    await manager._pageMenuUpdatePromise;
+
+    expect(getVisiblePageCommands()).toEqual(['restore-page']);
+  });
+
+  it('caches background-tab events without changing the focused tab menu', async () => {
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    await manager.initialize();
+    const listener = mocks.browser.runtime.onMessage.addListener.mock.calls[0][0];
+
+    listener({
+      action: MessageActions.PAGE_TRANSLATE_COMPLETE,
+      data: { isAggregated: true, isTranslated: true, translatedCount: 2 }
+    }, { tab: { id: 43 }, frameId: 0 });
+    await manager._pageMenuUpdatePromise;
+    expect(getVisiblePageCommands()).toEqual(['translate-page']);
+
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 43 }]);
+    mocks.handlePageTranslation.mockResolvedValue({ success: false, reason: 'frame_command_response_timeout' });
+    const activate = mocks.browser.tabs.onActivated.addListener.mock.calls[0][0];
+    activate({ tabId: 43, windowId: 1 });
+    await vi.waitFor(() => expect(getVisiblePageCommands()).toEqual(['restore-page']));
+  });
+
+  it('resynchronizes for the focused window rather than a tab activated in a background window', async () => {
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    await manager.initialize();
+    mocks.handlePageTranslation.mockClear();
+    mocks.handlePageTranslation.mockResolvedValue({ ...inactivePageStatus(), isTranslated: true });
+    const focus = mocks.browser.windows.onFocusChanged.addListener.mock.calls[0][0];
+
+    focus(-1);
+    expect(mocks.handlePageTranslation).not.toHaveBeenCalled();
+    focus(2);
+    await vi.waitFor(() => expect(getVisiblePageCommands()).toEqual(['restore-page']));
+
+    expect(mocks.browser.tabs.query).toHaveBeenCalledWith({ active: true, currentWindow: true });
+    expect(mocks.handlePageTranslation).toHaveBeenLastCalledWith(
+      { action: MessageActions.PAGE_TRANSLATE_GET_STATUS, context: 'context-menu' },
+      { tab: { id: 42 } }
+    );
+  });
+
+  it('does not overwrite newer lifecycle state with a late status probe', async () => {
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    await manager.initialize();
+    let resolveStatus;
+    mocks.handlePageTranslation.mockClear();
+    mocks.handlePageTranslation.mockImplementationOnce(() => new Promise(resolve => { resolveStatus = resolve; }));
+    const refresh = manager.refreshActivePageMenu();
+    await vi.waitFor(() => expect(resolveStatus).toEqual(expect.any(Function)));
+
+    const listener = mocks.browser.runtime.onMessage.addListener.mock.calls[0][0];
+    listener({
+      action: MessageActions.PAGE_TRANSLATE_START,
+      data: { isAggregated: true, isTranslating: true }
+    }, { tab: { id: 42 }, frameId: 0 });
+    resolveStatus(inactivePageStatus());
+    await refresh;
+    await manager._pageMenuUpdatePromise;
+
+    expect(getVisiblePageCommands()).toEqual(['restore-page']);
+  });
+
+  it('ignores late status from a previously active tab', async () => {
+    await manager.initialize();
+    let resolvePrevious;
+    mocks.handlePageTranslation.mockImplementationOnce(() => new Promise(resolve => { resolvePrevious = resolve; }));
+    const previousRefresh = manager.refreshActivePageMenu({ id: 42 });
+    await vi.waitFor(() => expect(resolvePrevious).toEqual(expect.any(Function)));
+
+    mocks.handlePageTranslation.mockResolvedValue(inactivePageStatus());
+    await manager.refreshActivePageMenu({ id: 43 });
+    resolvePrevious({ ...inactivePageStatus(), isTranslated: true });
+    await previousRefresh;
+
+    expect(getVisiblePageCommands()).toEqual(['translate-page']);
+    expect(manager.activePageTabId).toBe(43);
+  });
+
+  it('resets on navigation and ignores the previous document status response', async () => {
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    mocks.handlePageTranslation.mockResolvedValue({ ...inactivePageStatus(), isTranslated: true });
+    await manager.initialize();
+    expect(getVisiblePageCommands()).toEqual(['restore-page']);
+
+    let resolvePrevious;
+    mocks.handlePageTranslation.mockImplementationOnce(() => new Promise(resolve => { resolvePrevious = resolve; }));
+    const refresh = manager.refreshActivePageMenu();
+    await vi.waitFor(() => expect(resolvePrevious).toEqual(expect.any(Function)));
+    const update = mocks.browser.tabs.onUpdated.addListener.mock.calls[0][0];
+    update(42, { status: 'loading' });
+    await manager._pageMenuUpdatePromise;
+    resolvePrevious({ ...inactivePageStatus(), isTranslated: true });
+    await refresh;
+    expect(getVisiblePageCommands()).toEqual(['translate-page']);
+
+    mocks.handlePageTranslation.mockResolvedValue(inactivePageStatus());
+    mocks.handlePageTranslation.mockClear();
+    update(42, { status: 'complete' });
+    await vi.waitFor(() => expect(mocks.handlePageTranslation).toHaveBeenCalledOnce());
+  });
+
+  it('preserves restore when a status query fails or times out', async () => {
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    mocks.handlePageTranslation.mockResolvedValue({ ...inactivePageStatus(), isTranslated: true });
+    await manager.initialize();
+
+    mocks.handlePageTranslation.mockResolvedValue({ success: false, reason: 'frame_command_response_timeout' });
+    await manager.refreshActivePageMenu();
+    expect(getVisiblePageCommands()).toEqual(['restore-page']);
+
+    mocks.handlePageTranslation.mockRejectedValue(new Error('status unavailable'));
+    await expect(manager.refreshActivePageMenu()).resolves.toBeUndefined();
+    expect(getVisiblePageCommands()).toEqual(['restore-page']);
+  });
+
+  it('never shows both commands when lifecycle changes during an in-flight visibility update', async () => {
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    await manager.initialize();
+    const updateMenu = mocks.browser.contextMenus.update.getMockImplementation();
+    let resumeHide;
+    mocks.browser.contextMenus.update.mockImplementationOnce(async (id, changes) => {
+      await new Promise(resolve => { resumeHide = resolve; });
+      await updateMenu(id, changes);
+      expect(getVisiblePageCommands().length).toBeLessThanOrEqual(1);
+    });
+    mocks.browser.contextMenus.update.mockImplementation(async (id, changes) => {
+      await updateMenu(id, changes);
+      expect(getVisiblePageCommands().length).toBeLessThanOrEqual(1);
+    });
+    const listener = mocks.browser.runtime.onMessage.addListener.mock.calls[0][0];
+    const sender = { tab: { id: 42 }, frameId: 0 };
+    listener({ action: MessageActions.PAGE_TRANSLATE_START, data: { isAggregated: true, isTranslating: true } }, sender);
+    await vi.waitFor(() => expect(resumeHide).toEqual(expect.any(Function)));
+    listener({ action: MessageActions.PAGE_RESTORE_COMPLETE, data: { ...inactivePageStatus(), isAggregated: true } }, sender);
+    resumeHide();
+    await manager._pageMenuUpdatePromise;
+
+    expect(getVisiblePageCommands()).toEqual(['translate-page']);
+  });
+
+  it('handles a visibility API failure without revealing the other command', async () => {
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    await manager.initialize();
+    mocks.browser.contextMenus.update.mockRejectedValueOnce(new Error('hide failed'));
+    const listener = mocks.browser.runtime.onMessage.addListener.mock.calls[0][0];
+
+    listener({
+      action: MessageActions.PAGE_TRANSLATE_START,
+      data: { isAggregated: true, isTranslating: true }
+    }, { tab: { id: 42 }, frameId: 0 });
+    await manager._pageMenuUpdatePromise;
+
+    expect(getVisiblePageCommands()).toEqual(['translate-page']);
+    expect(mocks.logger.error).toHaveBeenCalledWith('Failed to sync page context menu visibility:', expect.any(Error));
+  });
+
+  it('refreshes the exact shown tab through Firefox menus when supported', async () => {
+    mocks.browser.menus = {
+      onShown: { addListener: vi.fn(), removeListener: vi.fn() },
+      refresh: vi.fn().mockResolvedValue(undefined)
+    };
+    await manager.initialize();
+    mocks.browser.tabs.query.mockClear();
+    mocks.handlePageTranslation.mockResolvedValue({ ...inactivePageStatus(), isTranslated: true });
+    const shown = mocks.browser.menus.onShown.addListener.mock.calls[0][0];
+
+    shown({}, { id: 43 });
+    await vi.waitFor(() => expect(mocks.browser.menus.refresh).toHaveBeenCalledOnce());
+
+    expect(mocks.browser.tabs.query).not.toHaveBeenCalled();
+    expect(getVisiblePageCommands()).toEqual(['restore-page']);
+    expect(mocks.handlePageTranslation).toHaveBeenLastCalledWith(
+      { action: MessageActions.PAGE_TRANSLATE_GET_STATUS, context: 'context-menu' },
+      { tab: { id: 43 } }
+    );
+  });
+
+  it('removes page listeners and tab state during cleanup without duplication on forced rebuild', async () => {
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    await manager.initialize();
+    await manager.initialize(true);
+    expect(mocks.browser.runtime.onMessage.addListener).toHaveBeenCalledOnce();
+    expect(mocks.browser.tabs.onActivated.addListener).toHaveBeenCalledOnce();
+
+    await manager.cleanup();
+
+    for (const event of [mocks.browser.runtime.onMessage, mocks.browser.tabs.onActivated,
+      mocks.browser.tabs.onUpdated, mocks.browser.tabs.onRemoved, mocks.browser.windows.onFocusChanged]) {
+      expect(event.removeListener).toHaveBeenCalledWith(event.addListener.mock.calls[0][0]);
+    }
+    expect(manager.pageTranslationStates.size).toBe(0);
+    expect(getVisiblePageCommands()).toEqual([]);
   });
 
   it('hides both whole-page commands when their visibility preference is disabled', async () => {
@@ -316,10 +637,13 @@ describe('ContextMenuManager keyed storage reads', () => {
   it('keeps restore available when whole-page translation is disabled', async () => {
     mocks.storageManager.get.mockResolvedValue(createSettings({ WHOLE_PAGE_TRANSLATION_ENABLED: false }));
 
-    await manager._setupMenusInternal();
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    mocks.handlePageTranslation.mockResolvedValue({ ...inactivePageStatus(), isTranslated: true });
+    await manager.initialize();
 
     expect(getCreatedMenu('translate-page')).toBeUndefined();
     expect(getCreatedMenu('restore-page')).toBeDefined();
+    expect(getVisiblePageCommands()).toEqual(['restore-page']);
   });
 
   it('uses the Whole Page provider independently of the Select Element provider', async () => {
@@ -338,11 +662,14 @@ describe('ContextMenuManager keyed storage reads', () => {
       mode === 'page-translation-batch' ? 'vajehyab' : 'googlev2'
     ));
 
-    await manager._setupMenusInternal();
+    mocks.browser.tabs.query.mockResolvedValue([{ id: 42 }]);
+    mocks.handlePageTranslation.mockResolvedValue({ ...inactivePageStatus(), isTranslated: true });
+    await manager.initialize();
 
     expect(getCreatedMenu('translate-page')).toBeUndefined();
     expect(getCreatedMenu('restore-page')).toBeDefined();
     expect(getCreatedMenu('translate-with-select-element')).toBeDefined();
+    expect(getVisiblePageCommands()).toEqual(['restore-page']);
   });
 
   it('enables new whole-page commands for older visibility settings', async () => {
