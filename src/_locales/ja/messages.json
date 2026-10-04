@@ -417,7 +417,7 @@
     "message": "このサイト"
   },
   "auto_translate_scope_menu_label": {
-    "message": "自動翻訳の範囲"
+    "message": "次回以降の訪問時に自動翻訳"
   },
   "auto_translate_managed_by_broader_rule": {
     "message": "より広いルールによって管理されています"

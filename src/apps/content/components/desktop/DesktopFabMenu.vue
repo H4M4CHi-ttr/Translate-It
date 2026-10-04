@@ -136,7 +136,7 @@
               v-if="item.secondaryAction && scopeMenuOpen"
               class="fab-auto-translate-scopes"
               role="group"
-              :aria-label="t('auto_translate_scope_menu_label', 'Auto-translate scope')"
+              :aria-label="t('auto_translate_scope_menu_label', 'Auto-translate on future visits')"
               @click.stop
               @keydown.escape.stop="onScopeGroupKeydown"
             >
@@ -641,7 +641,7 @@ const menuItems = computed(() => {
 
   const pageSecondaryAction = isAutoTranslateToggleVisible.value ? {
     active: isActive.value,
-    title: t('auto_translate_scope_menu_label', 'Auto-translate scope'),
+    title: t('auto_translate_scope_menu_label', 'Auto-translate on future visits'),
   } : null;
 
   if (status.isAuto || status.isTranslating) {

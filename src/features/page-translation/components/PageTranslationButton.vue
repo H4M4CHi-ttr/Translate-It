@@ -298,7 +298,7 @@ const {
   scopeActions,
   openManageRules,
 } = useAutoTranslateRules({ currentUrl: activeTabUrl });
-const scopeMenuLabel = computed(() => t('auto_translate_scope_menu_label', 'Auto-translate scope'));
+const scopeMenuLabel = computed(() => t('auto_translate_scope_menu_label', 'Auto-translate on future visits'));
 const scopeMenuOpen = ref(false);
 const scopeTrigger = ref(null);
 const firstScopeItem = ref(null);
