@@ -71,6 +71,20 @@
             >
             <span>{{ t('pdf_app_title') || 'PDF' }}</span>
           </button>
+          <button
+            v-if="!IsMobile"
+            :disabled="!isHistoryPanelReady"
+            type="button"
+            role="menuitem"
+            class="ti-header-menu-item"
+            @click="close(); handleOpenHistoryInSidePanel()"
+          >
+            <MaskIcon
+              :src="menuIcon('history.svg')"
+              :size="18"
+            />
+            <span>{{ t('SIDEPANEL_HISTORY_TOOLTIP', 'Translation History') }}</span>
+          </button>
           <!-- Narrow-width duplicates: hidden at normal widths via
           ti-header-menu-item--narrow-only / --very-narrow-only (see
           PopupHeader.scss breakpoint ownership). They keep Mouse Hover,
@@ -283,6 +297,7 @@ const props = defineProps({
 
 // Refs
 const sidePanelButton = ref(null)
+const activeTabForSidePanel = ref(null)
 
 // Stores
 const settingsStore = useSettingsStore()
@@ -311,6 +326,11 @@ const menuIcon = (name) => ExtensionContextManager.safeGetURL(`icons/ui/${name}`
 // Computed
 const IsMobile = computed(() => {
   return getBrowserInfoSync().isMobile
+})
+
+const isHistoryPanelReady = computed(() => {
+  const activeTab = activeTabForSidePanel.value
+  return Boolean(activeTab?.id) && activeTab?.windowId !== undefined && activeTab?.windowId !== null
 })
 
 const isExtensionEnabledGlobal = computed(() => {
@@ -469,6 +489,7 @@ const handleExcludeToggle = async () => {
 onMounted(async () => {
   try {
     const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true })
+    activeTabForSidePanel.value = activeTab || null
     if (activeTab) {
       const response = await sendMessage({
         action: MessageActions.IS_Current_Page_Excluded,
@@ -508,5 +529,60 @@ const handleOpenSidePanelNative = async (event) => {
   } catch (error) {
     await handleError(error, 'PopupHeader-sidePanel')
   }
+}
+
+const handleOpenHistoryInSidePanel = async () => {
+  if (!isHistoryPanelReady.value) return
+
+  const session = browser.storage?.session
+  const activeTab = activeTabForSidePanel.value
+  const windowId = activeTab?.windowId
+  const key = windowId == null ? null : `__translateItSidepanelPendingIntent:${windowId}`
+
+  if (browser.sidePanel && (!activeTab?.id || !key)) {
+    await handleError(new Error('Active tab is unavailable; cannot open History in the Side Panel'), 'PopupHeader-sidePanelHistory')
+    return
+  }
+  if (browser.sidebarAction && !key) {
+    await handleError(new Error('Current window is unavailable; cannot open History in the Side Panel'), 'PopupHeader-sidePanelHistory')
+    return
+  }
+  if (!browser.sidePanel && !browser.sidebarAction) {
+    await handleError(new Error('Side Panel is unavailable'), 'PopupHeader-sidePanelHistory')
+    return
+  }
+
+  let intentWrite = Promise.resolve()
+  if (session && key) {
+    try {
+      intentWrite = Promise.resolve(session.set({ [key]: { action: 'open-history' } })).catch((error) => {
+        logger.warn('Could not store pending side panel history intent', error)
+      })
+    } catch (error) {
+      logger.warn('Could not store pending side panel history intent', error)
+    }
+  }
+
+  let nativeOpen
+  try {
+    nativeOpen = Promise.resolve(browser.sidebarAction
+      ? browser.sidebarAction.open()
+      : browser.sidePanel.open({ tabId: activeTab.id }))
+      .then(() => ({ success: true }), (error) => ({ error }))
+  } catch (error) {
+    nativeOpen = Promise.resolve({ error })
+  }
+
+  const [openResult] = await Promise.all([nativeOpen, intentWrite])
+  if (openResult.error) {
+    try {
+      if (session && key) await session.remove(key)
+    } catch (error) {
+      logger.warn('Could not remove failed side panel history intent', error)
+    }
+    await handleError(openResult.error, 'PopupHeader-sidePanelHistory')
+    return
+  }
+  window.close()
 }
 </script>
