@@ -22,4 +22,3 @@ tests/coverage/
 .continue/
 .qwen/
 skills-lock.json
-#openspec/
