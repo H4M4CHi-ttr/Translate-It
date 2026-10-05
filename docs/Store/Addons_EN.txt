@@ -4,29 +4,39 @@ Translate without leaving the page you're on.
 
 **Translate It** brings different translation tools together in one Firefox extension. Translate selected text, input fields, page elements, full pages, PDFs, subtitles, and text inside images.
 
-Choose the translation service that works best for you, including traditional providers, AI services, and local or offline options where available.
+Choose the translation service that works best for you, including traditional providers, AI services, and local or offline options.
 
 ---
 
 **✓ What You Can Do**
 
 - **Text Selection:** Select text on any page and see the translation right next to it.
+
 - **Translate While Typing:** Translate text directly inside input fields before sending it.
+
 - **Element Translation:** Click a page element to translate it in place while keeping the layout intact.
+
 - **Whole Page Translation:** Translate complete pages, including dynamically loaded content and infinite-scroll pages.
+
 - **Mouse Hover Translation:** Hold a modifier key and hover over text to quickly translate a word, sentence, or content block.
+
 - **Screen Capture & OCR:** Extract and translate text from images, videos, and other content where text can't normally be selected.
+
 - **PDF Translation:** Open local or online PDFs, translate pages, use bilingual views, run OCR on scanned documents, and export translated content to TXT, Markdown, or HTML.
+
 - **Subtitle Translation:** Translate SRT subtitle files while preserving timestamps and formatting.
+
 - **Smart Dictionary:** View definitions, synonyms, examples, and pronunciation information.
+
 - **Text to Speech:** Listen to translated text using supported voices.
+
 - **History & Export:** Keep previous translations and export them when needed.
 
 ---
 
 **✓ Providers and Flexibility**
 
-Translate It supports more than 10 translation providers, including **Google, Microsoft, DeepL, OpenAI-compatible services, DeepSeek, WebAI to API**, and more.
+Translate It! supports more than 10 translation providers, including **Google, Microsoft, DeepL, OpenAI-compatible services, DeepSeek, WebAI to API**, and more.
 
 You're not tied to a single provider. Choose the one that best fits your needs, whether you care most about quality, speed, cost, or privacy.
 
@@ -36,7 +46,7 @@ For supported AI providers, optimization controls let you choose between larger,
 
 **✓ Built for Everyday Browsing**
 
-Translate It works with regular pages as well as long articles, dynamic websites, and content that loads as you scroll.
+Translate It! works with regular pages as well as long articles, dynamic websites, and content that loads as you scroll.
 
 Features such as progressive translation, lazy loading, and configurable processing help keep translations responsive across different types of pages.
 
@@ -54,9 +64,9 @@ Major providers support a wide range of languages, including **English, Persian,
 
 ## ✓ Privacy & Open Source
 
-* **Your Choice:** Decide how your translations are processed, with local or offline options available for supported features.
-* **Flexible Providers:** Choose the provider that best fits your priorities for privacy, quality, speed, or cost.
-* **Open Source:** Translate It is fully open source. Anyone can inspect the code, report issues, or contribute to the project.
+- **Your Choice:** Decide how your translations are processed, with local or offline options available for supported features.
+- **Flexible Providers:** Choose the provider that best fits your priorities for privacy, quality, speed, or cost.
+- **Open Source:** Translate It is fully open source. Anyone can inspect the code, report issues, or contribute to the project.
 
 [View Translate It on GitHub](https://github.com/Translate-It-App/Translate-It/)
 
