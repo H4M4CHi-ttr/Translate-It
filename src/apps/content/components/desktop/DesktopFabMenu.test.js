@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
     removeEventListener: vi.fn(),
   },
   autoRules: null,
+  mouseHoverEnabled: null,
+  translations: {},
 }));
 
 vi.mock('@/store/modules/mobile.js', () => ({
@@ -32,7 +34,7 @@ vi.mock('@/features/settings/stores/settings.js', () => ({
 }));
 
 vi.mock('@/composables/shared/useUnifiedI18n', () => ({
-  useUnifiedI18n: () => ({ t: (key) => key }),
+  useUnifiedI18n: () => ({ t: (key) => mocks.translations[key] ?? key }),
 }));
 
 vi.mock('@/shared/messaging/core/UnifiedMessaging.js', () => ({
@@ -64,7 +66,7 @@ vi.mock('@/features/tts/composables/useTTSSmart.js', () => ({
 
 vi.mock('@/features/mouse-hover/composables/useMouseHoverToggle.js', () => ({
   useMouseHoverToggle: () => ({
-    isMouseHoverEnabled: { value: false },
+    isMouseHoverEnabled: mocks.mouseHoverEnabled,
     toggleMouseHover: vi.fn(),
   }),
 }));
@@ -145,6 +147,8 @@ describe('DesktopFabMenu page command transport', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.sendRegularMessage.mockResolvedValue({ success: true });
+    mocks.translations = {};
+    mocks.mouseHoverEnabled = ref(false);
     mocks.mobileStore = reactive({
       hasElementTranslations: false,
       isFullscreen: false,
@@ -222,6 +226,9 @@ describe('DesktopFabMenu page command transport', () => {
     await wrapper.vm.$nextTick();
     await wrapper.get('.fab-menu-item-secondary-btn').trigger('click');
     expect(wrapper.find('.fab-auto-translate-scopes').exists()).toBe(true);
+    expect(wrapper.find('.fab-scope-separator').exists()).toBe(false);
+    expect(wrapper.find('.fab-scope-note').exists()).toBe(false);
+    expect(wrapper.find('.fab-scope-link').exists()).toBe(false);
     expect(document.activeElement).toBe(wrapper.get('.fab-auto-translate-scopes button').element);
     expect(wrapper.get('.fab-menu-item-secondary-btn').attributes('aria-haspopup')).toBeUndefined();
     expect(wrapper.get('.fab-menu-item-secondary-btn').attributes('aria-expanded')).toBe('true');
@@ -236,6 +243,34 @@ describe('DesktopFabMenu page command transport', () => {
     expect(wrapper.find('.fab-auto-translate-scopes').exists()).toBe(false);
     expect(document.activeElement).toBe(wrapper.get('.fab-menu-item-secondary-btn').element);
     expect(wrapper.vm.isMenuOpen).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('shows broader-rule guidance and returns focus to the star on Escape', async () => {
+    mocks.autoRules.showManageRules.value = true;
+    const wrapper = mount(DesktopFabMenu, { attachTo: document.body });
+    wrapper.vm.isReady = true;
+    wrapper.vm.isMenuOpen = true;
+    await wrapper.vm.$nextTick();
+    const star = wrapper.get('.fab-menu-item-secondary-btn');
+    await star.trigger('click');
+
+    const separator = wrapper.get('.fab-auto-translate-scopes .fab-scope-separator');
+    const note = wrapper.get('.fab-auto-translate-scopes .fab-scope-note');
+    const manageRules = wrapper.get('.fab-auto-translate-scopes .fab-scope-link');
+    expect(separator.element.tagName).toBe('HR');
+    expect(note.element.tagName).toBe('DIV');
+    expect(note.element.tagName).not.toBe('BUTTON');
+    expect(note.text()).toContain('auto_translate_scope_covered_note');
+    expect(manageRules.element.tagName).toBe('BUTTON');
+    expect(manageRules.text()).toContain('auto_translate_manage_rules');
+
+    await manageRules.trigger('click');
+    expect(mocks.autoRules.openManageRules).toHaveBeenCalledOnce();
+    await manageRules.trigger('keydown', { key: 'Escape' });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('.fab-auto-translate-scopes').exists()).toBe(false);
+    expect(document.activeElement).toBe(star.element);
     wrapper.unmount();
   });
 
@@ -254,5 +289,67 @@ describe('DesktopFabMenu page command transport', () => {
     wrapper.vm.isMenuOpen = true;
     await wrapper.vm.$nextTick();
     expect(wrapper.find('.fab-auto-translate-scopes').exists()).toBe(false);
+  });
+
+  it.each(['0.8', '1', '1.2', '1.5'])(
+    'keeps menu item content intact at FAB size %s', async (size) => {
+      mocks.settingsStore.settings.FAB_SIZE = size;
+      const wrapper = mount(DesktopFabMenu);
+      wrapper.vm.isReady = true;
+      wrapper.vm.isMenuOpen = true;
+      await wrapper.vm.$nextTick();
+
+      expect(wrapper.get('.desktop-fab-container').element.style.getPropertyValue('--fab-scale')).toBe(size);
+
+      const translateRow = wrapper.findAll('.fab-menu-item').find(row =>
+        row.get('.fab-menu-item-text').text() === 'desktop_fab_translate_page_label');
+      expect(translateRow).toBeTruthy();
+      expect(translateRow.get('.menu-icon-wrapper .fab-menu-icon').attributes('alt'))
+        .toBe('desktop_fab_translate_page_label');
+      expect(translateRow.get('.fab-menu-item-text').text()).toBe('desktop_fab_translate_page_label');
+      expect(translateRow.find('.fab-menu-item-secondary-btn').exists()).toBe(true);
+      wrapper.unmount();
+    },
+  );
+
+  it('shows the mouse-hover toggle label for its current enabled state', async () => {
+    mocks.settingsStore.settings.SHOW_MOUSE_HOVER_IN_FAB = true;
+    const wrapper = mount(DesktopFabMenu);
+    wrapper.vm.isReady = true;
+    wrapper.vm.isMenuOpen = true;
+    await wrapper.vm.$nextTick();
+
+    const mouseHoverItem = () => wrapper.findAll('.fab-menu-item').find(row =>
+      row.get('.fab-menu-item-text').text().startsWith('mouse_hover_'));
+    expect(mouseHoverItem().get('.fab-menu-item-text').text()).toBe('mouse_hover_enable_label');
+
+    mocks.mouseHoverEnabled.value = true;
+    await wrapper.vm.$nextTick();
+    expect(mouseHoverItem().get('.fab-menu-item-text').text()).toBe('mouse_hover_disable_label');
+    wrapper.unmount();
+  });
+
+  it('keeps the page star beside its label and the scope panel after it', async () => {
+    const longLabel = 'Translate this entire page with a deliberately long localized label';
+    mocks.translations.desktop_fab_translate_page_label = longLabel;
+    const wrapper = mount(DesktopFabMenu);
+    wrapper.vm.isReady = true;
+    wrapper.vm.isMenuOpen = true;
+    await wrapper.vm.$nextTick();
+
+    const translateRow = wrapper.findAll('.fab-menu-item').find(row =>
+      row.get('.fab-menu-item-text').text() === longLabel);
+    expect(translateRow.get('.fab-menu-item-text').text()).toBe(longLabel);
+    const star = translateRow.get('.fab-menu-item-secondary-btn');
+    expect(star.element.parentElement).toBe(translateRow.element);
+    expect(translateRow.element.children[0].classList).toContain('menu-icon-wrapper');
+    expect(translateRow.element.children[1]).toBe(translateRow.get('.fab-menu-item-text').element);
+
+    await star.trigger('click');
+    const scopePanel = translateRow.get('.fab-auto-translate-scopes');
+    expect(scopePanel.element.parentElement).toBe(translateRow.element);
+    expect(Array.from(translateRow.element.children).indexOf(scopePanel.element))
+      .toBeGreaterThan(Array.from(translateRow.element.children).indexOf(star.element));
+    wrapper.unmount();
   });
 });

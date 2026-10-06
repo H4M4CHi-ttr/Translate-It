@@ -14,7 +14,14 @@
   --badge-offset: calc(42px * var(--fab-scale)); /* Vertical spacing between badges */
   --translate-badge-size: calc(20px * var(--fab-scale));
   --menu-min-width: 190px;
+  --menu-max-width: 260px;
   --menu-font-size: 13px;
+
+  /* Menu icon metrics are intentionally NOT multiplied by --fab-scale so rows,
+     gaps and the label column stay identical for every FAB_SIZE */
+  --menu-icon-box: 28px;
+  --menu-icon-size: 20px;
+  --menu-gap: 6px;
 
   /* Media Queries for Responsive Scaling */
   @media (max-width: 576px) { // Small screens (Mobile)
@@ -181,7 +188,19 @@
     bottom: 0px !important;
     border-radius: 14px !important;
     padding: 5px !important;
-    width: var(--menu-min-width) !important;
+
+    /* Content-driven width: floor 190px, ceiling min(260px), both bounded by
+       the same viewport-safe --menu-avail-width — so when the viewport offers
+       less than 190px, the floor itself shrinks instead of overflowing.
+       (clamp() with max-content is invalid in Chromium — use the 3 properties.)
+       Free space on either dock side is 100vw + edge-offset - fab-size - 26px,
+       so "- 40px" keeps a >=36px margin for every edge-offset (22/25/30);
+       max(0px, ...) only guards against absurdly tiny viewports. */
+    --menu-avail-width: max(0px, calc(100vw - var(--fab-size) - 40px));
+
+    width: max-content !important;
+    min-width: min(var(--menu-min-width), var(--menu-avail-width)) !important;
+    max-width: min(var(--menu-max-width), var(--menu-avail-width)) !important;
     display: flex !important;
     flex-direction: column !important;
     z-index: 2147483647 !important;
@@ -201,6 +220,7 @@
       display: flex !important;
       flex-wrap: wrap !important;
       align-items: center !important;
+      column-gap: var(--menu-gap) !important;
       padding: 7px 9px !important;
       cursor: pointer !important;
       width: 100% !important;
@@ -219,8 +239,8 @@
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
-        width: calc(var(--fab-size) * 0.52) !important;
-        height: calc(var(--fab-size) * 0.52) !important;
+        width: var(--menu-icon-box) !important;
+        height: var(--menu-icon-box) !important;
         flex-shrink: 0 !important;
         border-radius: 7px !important;
         transition: all 0.2s ease !important;
@@ -229,8 +249,8 @@
         .fab-circle-progress {
           position: absolute !important;
           inset: -2px !important;
-          width: calc(var(--fab-size) * 0.59) !important;
-          height: calc(var(--fab-size) * 0.59) !important;
+          width: calc(var(--menu-icon-box) + 4px) !important;
+          height: calc(var(--menu-icon-box) + 4px) !important;
           transform: rotate(-90deg) !important;
           z-index: 0 !important;
 
@@ -246,8 +266,8 @@
       }
 
       .fab-menu-icon {
-        width: calc(var(--fab-size) * 0.37) !important;
-        height: calc(var(--fab-size) * 0.37) !important;
+        width: var(--menu-icon-size) !important;
+        height: var(--menu-icon-size) !important;
         object-fit: contain !important;
         display: block !important;
         border: none !important;
@@ -259,9 +279,14 @@
       .fab-menu-item-text {
         font-size: var(--menu-font-size) !important;
         font-weight: 600 !important;
-        white-space: nowrap !important;
         font-family: sans-serif !important;
         line-height: 1.2 !important;
+
+        /* min-width:0 overrides the automatic flex minimum so the label can
+           never push itself (or the star) onto a new flex line — long labels
+           wrap INSIDE this column instead; `anywhere` covers unbroken strings */
+        min-width: 0 !important;
+        overflow-wrap: anywhere !important;
         flex: 1 !important;
         letter-spacing: -0.01em !important;
       }
@@ -270,7 +295,7 @@
         background: none !important;
         border: none !important;
         padding: 4px !important;
-        margin-left: 6px !important;
+        margin-left: 0 !important; /* row column-gap provides the spacing */
         margin-right: 2px !important;
         display: flex !important;
         align-items: center !important;
@@ -317,14 +342,23 @@
         width: 100% !important;
         flex: 0 0 100% !important;
         padding-block: 4px 2px !important;
-        padding-inline-start: 28px !important;
+
+        /* inline-size containment: this panel's contents must never inflate the
+           menu's width: max-content — opening the scope disclosure used to sum
+           icon+label+star+panel into one hypothetical flex line (raw max-content
+           373.8px) and snap the menu to its 260px cap (211.3 -> 260 jump).
+           The label-column indent (icon box + gap) is applied by the children's
+           margin-inline-start instead: panel padding still counts toward the
+           contained intrinsic size, child margins do not. */
+        contain: inline-size !important;
         box-sizing: border-box !important;
 
         button {
           display: flex !important;
           align-items: center !important;
           gap: 6px !important;
-          width: 100% !important;
+          width: auto !important; /* column-stretch + margin fills to the right edge (was 100%) */
+          margin-inline-start: calc(var(--menu-icon-box) + var(--menu-gap)) !important;
           padding: 5px 4px !important;
           border: 0 !important;
           background: transparent !important;
@@ -335,7 +369,51 @@
         }
 
         button span { width: 12px !important; }
-        div { padding: 5px 4px !important; font-size: 0.85em !important; }
+        div {
+          padding: 5px 4px !important;
+          font-size: 0.85em !important;
+          margin-inline-start: calc(var(--menu-icon-box) + var(--menu-gap)) !important;
+        }
+
+        /* informational group above the note: native divider + muted note +
+           small text link. Class-scoped so the primary This Page/This Site
+           buttons keep their existing look. Divider takes the panel's own
+           text color (currentcolor) so both themes stay in sync; the note's
+           #5b6472 keeps >4.5:1 on the 0.92-white menu over a dark page. */
+        .fab-scope-separator {
+          height: 1px !important;
+          border: none !important;
+          margin: 6px 4px 2px calc(var(--menu-icon-box) + var(--menu-gap)) !important;
+          background-color: currentcolor !important;
+          opacity: 0.12 !important;
+        }
+
+        .fab-scope-note {
+          color: #5b6472 !important;
+          overflow-wrap: anywhere !important;
+        }
+
+        .fab-scope-link {
+          font-size: 0.85em !important;
+          font-weight: 600 !important;
+          padding: 4px !important;
+
+          /* content-sized action, not a full-row pill: flex-start makes the
+             box hug the label so the focus ring surrounds the link only;
+             max-width = row content minus the shared button indent (34px, from
+             the generic button rule) keeps long localized action labels
+             wrapping inside the column instead of overflowing. */
+          align-self: flex-start !important;
+          min-width: 0 !important;
+          max-width: calc(100% - var(--menu-icon-box) - var(--menu-gap)) !important;
+          overflow-wrap: anywhere !important;
+
+          /* explicit focus ring in both themes (dark recolors below) */
+          &:focus-visible {
+            outline: 2px solid #1a5fb4 !important;
+            outline-offset: 1px !important;
+          }
+        }
       }
     }
   }
@@ -364,6 +442,17 @@
           &:hover,
           &:focus-visible {
             background-color: rgba(74, 144, 226, 0.18) !important;
+          }
+        }
+
+        /* text-link affordance instead of the full-row pill */
+        .fab-scope-link {
+          color: #1a5fb4 !important;
+
+          &:hover {
+            background-color: transparent !important;
+            color: #1a5fb4 !important;
+            text-decoration: underline !important;
           }
         }
       }
@@ -400,6 +489,22 @@
           &:focus-visible {
             background-color: rgba(255, 255, 255, 0.16) !important;
           }
+        }
+
+        /* 0.6 white keeps the 11.9px note >4.5:1 on the 0.95-dark menu
+           over both light and dark pages behind the translucent panel */
+        .fab-scope-note { color: rgba(255, 255, 255, 0.6) !important; }
+
+        .fab-scope-link {
+          color: #60a5fa !important;
+
+          &:hover {
+            background-color: transparent !important;
+            color: #60a5fa !important;
+            text-decoration: underline !important;
+          }
+
+          &:focus-visible { outline-color: #60a5fa !important; }
         }
       }
 
