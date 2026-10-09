@@ -122,6 +122,29 @@ describe('PageTranslationScheduler', () => {
     scheduler.reset();
   });
 
+  it('counts retained nodes once per callback and reaches idle without a provider request', async () => {
+    vi.useFakeTimers();
+    try {
+      scheduler.setSettings({ autoTranslateOnDOMChanges: true });
+      scheduler.recordRetainedTranslation(scheduler.sessionContext);
+      scheduler.recordRetainedTranslation(Symbol('old-context'));
+      expect(scheduler.totalTasks).toBe(1);
+      expect(scheduler.translatedCount).toBe(1);
+      expect(scheduler.failedCount).toBe(0);
+      expect(scheduler.pendingSettlements.size).toBe(0);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(pageEventBus.emit).toHaveBeenCalledWith(MessageActions.PAGE_TRANSLATE_IDLE, expect.objectContaining({
+        translatedCount: 1, totalCount: 1, failedCount: 0, isAutoTranslating: true,
+      }));
+      expect(safeSendMessage).not.toHaveBeenCalled();
+      scheduler.stop();
+      scheduler.recordRetainedTranslation(scheduler.sessionContext);
+      expect(scheduler.totalTasks).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   describe('bounded independent AI batches', () => {
     it.each([[3, 25, 2], [5, 10, 4]])('enables Custom workers at level %i without changing its existing batch size', async (level, chunkSize, limit) => {
       const config = await import('@/shared/config/config.js');

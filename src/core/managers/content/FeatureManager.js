@@ -831,18 +831,23 @@ export class FeatureManager extends ResourceTracker {
     }
   }
 
-  checkForUrlChange() {
+  checkForUrlChange({ force = false } = {}) {
     const newUrl = window.location.href;
-    if (newUrl === this._lastDetectedUrl) return false;
+    if (!force && newUrl === this._lastDetectedUrl) return false;
 
     const oldUrl = this._lastDetectedUrl;
     this._lastDetectedUrl = newUrl;
     this._navigationRevision += 1;
     const capturedRevision = this._navigationRevision;
+    const pageManager = this.featureHandlers.get('pageTranslation');
+    pageManager?.stopAutoTranslation({ cancellationReason: 'operation-abort' }).catch(() => {
+      logger.warn('Stopping obsolete page translation on navigation failed');
+    });
     return this.handleUrlChange(oldUrl, newUrl, capturedRevision);
   }
 
   async handleUrlChange(oldUrl, newUrl, expectedRevision = null) {
+    if (expectedRevision !== null && this._isNavigationStale(expectedRevision)) return;
     let capturedRevision;
     if (expectedRevision !== null) {
       capturedRevision = expectedRevision;
@@ -910,7 +915,7 @@ export class FeatureManager extends ResourceTracker {
         if (isStale()) return;
         const response = await sendRegularMessage({
           action: MessageActions.PAGE_TRANSLATE,
-          data: { isAuto: true },
+          data: { isAuto: true, ...(oldUrl === newUrl && { preserveAcceptedTranslations: true }) },
         }, { returnFailureResponse: true });
         if (response?.success === false) {
           logger.debug('SPA auto page translation command rejected', response);

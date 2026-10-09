@@ -46,7 +46,7 @@ export class PageTranslationEventManager {
           || sender?.id !== browser.runtime.id
           || sender?.tab) return;
       // A history round trip can end on the same URL before its notification arrives.
-      this._invalidateTranslation();
+      void this.manager.featureManager?.checkForUrlChange({ force: true });
     };
     this.manager.addEventListener(browser.runtime.onMessage, 'message', this.navigationListener);
   }
@@ -128,6 +128,7 @@ export class PageTranslationEventManager {
   }
 
   _invalidateTranslation() {
+    this.manager.translationSettingsRevision = (this.manager.translationSettingsRevision || 0) + 1;
     void this.manager.stopAutoTranslation({ cancellationReason: 'operation-abort' }).catch(() => {
       this.logger.warn('Stopping obsolete page translation failed');
     });

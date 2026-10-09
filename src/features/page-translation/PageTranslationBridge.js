@@ -157,7 +157,16 @@ export class PageTranslationBridge extends ResourceTracker {
     this.showOriginalOnHover = true; // Initial default
   }
 
-  async initialize(settings, onTranslateCallback, sessionContext = null) {
+  async initialize(settings, onTranslateCallback, sessionContext = null, {
+    preserveAcceptedTranslations = false, onRetainedTranslation = null, settingsRevision = 0,
+  } = {}) {
+    const previousSession = this.session;
+    const previousStorage = preserveAcceptedTranslations
+      && previousSession?.url === window.location.href
+      && previousSession.targetLanguage === settings.targetLanguage
+      && previousSession.translationApi === settings.translationApi
+      && previousSession.settingsRevision === settingsRevision
+      ? previousSession.nodesTranslator?.nodeStorage : null;
     this.cleanup();
     
     // Explicitly set from settings (defaulted to true if undefined)
@@ -173,6 +182,9 @@ export class PageTranslationBridge extends ResourceTracker {
       persistentTranslator: null,
       context: sessionContext,
       url: window.location.href,
+      targetLanguage: settings.targetLanguage,
+      translationApi: settings.translationApi,
+      settingsRevision,
       root: null,
       active: true,
       shadowDiscoveryObserver: null,
@@ -464,6 +476,11 @@ export class PageTranslationBridge extends ResourceTracker {
           try {
             actualNodeData.originalText = getCurrentNodeValue(node);
             setCurrentNodeValue(node, text);
+            actualNodeData.acceptedTranslation = {
+              originalText: actualNodeData.originalText,
+              text: getCurrentNodeValue(node),
+              updateId: actualNodeData.updateId,
+            };
           } catch (error) {
             if (decision.settlement?.state === 'pending') {
               decision.settlement.settle(
@@ -500,6 +517,31 @@ export class PageTranslationBridge extends ResourceTracker {
     }
 
     const nodesTranslator = new GuardedNodesTranslator(translateWithContext);
+    const retainAcceptedTranslation = (node) => {
+      if (!previousStorage || nodesTranslator.has(node) || !isActiveTarget(node)) return false;
+      const previous = previousStorage.get(node);
+      const accepted = previous?.acceptedTranslation;
+      if (!accepted || previous.updateId !== accepted.updateId
+          || getCurrentNodeValue(node) !== accepted.text) return false;
+      nodesTranslator.nodeStorage.set(node, {
+        id: nodesTranslator.idCounter++, updateId: 1, originalText: accepted.originalText,
+        importanceScore: previous.importanceScore,
+        acceptedTranslation: { ...accepted, updateId: 1 },
+      });
+      if (settings.showOriginalOnHover) hoverPreviewLookup.add(node, accepted.originalText, accepted.text);
+      applyTranslationFont(node);
+      onRetainedTranslation?.();
+      return true;
+    };
+
+    if (currentSession.intersectionScheduler) {
+      const originalAdd = currentSession.intersectionScheduler.add;
+      currentSession.intersectionScheduler.add = function(node, callback) {
+        // Restore ownership must survive even when visibility defers translation.
+        if (retainAcceptedTranslation(node)) return;
+        return originalAdd.call(this, node, callback);
+      };
+    }
 
     /**
      * MONKEY-PATCH: Capture the node being processed by NodesTranslator.
@@ -508,6 +550,7 @@ export class PageTranslationBridge extends ResourceTracker {
      */
     const originalTranslate = nodesTranslator.translate;
     nodesTranslator.translate = function(node, callback) {
+      retainAcceptedTranslation(node);
       if (this.has(node)) return originalTranslate.call(this, node, callback);
       this.currentNode = node;
       this.currentTaskGeneration = nextTargetGeneration(node);

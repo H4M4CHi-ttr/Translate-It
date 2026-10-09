@@ -7,6 +7,10 @@ vi.mock('webextension-polyfill', () => ({
     runtime: { getBrowserInfo: vi.fn(), getManifest: () => ({ version: '1.0.0' }) },
     storage: { local: { get: vi.fn(), set: vi.fn() } },
     tabs: { sendMessage: vi.fn() },
+    i18n: {
+      getUILanguage: () => 'en',
+      detectLanguage: vi.fn(async text => ({ isReliable: true, languages: [{ language: /[\u3040-\u30ff]/.test(text) ? 'ja' : 'en', percentage: 100 }] })),
+    },
   },
 }));
 vi.mock('@/shared/logging/logger.js', () => ({
@@ -79,12 +83,13 @@ describe('Page → CustomProvider physical concurrency', () => {
     vi.useRealTimers();
   });
 
-  const runBatch = index => coordinator.processRequest({
+  const runBatch = (index, { sourceLanguage = 'en', alreadyTranslated = false } = {}) => coordinator.processRequest({
     mode: TranslationMode.Page,
     messageId: `request-${index}`,
     data: {
-      provider: 'custom', sourceLanguage: 'en', targetLanguage: 'ja', sessionId: 'page-session',
-      text: JSON.stringify([0, 1].map(unit => ({ id: `unit-${index}-${unit}`, text: `Source ${index}/${unit}` }))),
+      provider: 'custom', sourceLanguage, targetLanguage: 'ja', sessionId: 'page-session',
+      text: JSON.stringify([0, 1].map(unit => ({ id: `unit-${index}-${unit}`, text: alreadyTranslated
+        ? `すでに翻訳されたナビゲーション項目 ${index}/${unit}` : `Source ${index}/${unit}` }))),
     },
   }, { translationEngine: engine });
 
@@ -151,6 +156,49 @@ describe('Page → CustomProvider physical concurrency', () => {
     assertMapped(await Promise.all(pending));
     expect(maximum).toBe(1);
     expect(attempts).toHaveLength(4);
+  });
+
+  it('accepts an already-Japanese first AUTO batch and hands detection to English siblings once', async () => {
+    installHttp();
+    const provider = await engine.getProvider();
+    const calls = vi.spyOn(provider, 'translate');
+    const finalized = vi.spyOn(coordinator, '_finalizePageSourceResolution');
+    const acquires = vi.spyOn(coordinator, '_acquirePageSourceResolution');
+    const pending = Array.from({ length: 4 }, (_, index) => runBatch(index, { sourceLanguage: 'auto', alreadyTranslated: index === 0 }));
+    await advance(0);
+    expect(acquires).toHaveBeenCalledTimes(4);
+    expect(attempts).toHaveLength(1);
+    // Let real lazy module loading settle between synthetic HTTP completion steps.
+    for (let step = 0; step < 20; step++) await advance(50);
+    const results = await Promise.all(pending);
+    expect(results.every(result => result.success)).toBe(true);
+    expect(attempts).toHaveLength(4);
+    expect(finalized.mock.calls[0][2]).toMatchObject({ sourceLanguage: 'auto', targetLanguage: 'ja' });
+    expect(finalized.mock.calls[1][2]).toMatchObject({ sourceLanguage: 'en', targetLanguage: 'ja' });
+    expect(calls.mock.calls.map(call => call[1])).toEqual(['auto', 'auto', 'en', 'en']);
+    results.forEach((result, index) => {
+      const original = index === 0 ? `すでに翻訳されたナビゲーション項目 ${index}/0` : `Source ${index}/0`;
+      expect(JSON.parse(result.translatedText)[0]).toEqual({ id: `unit-${index}-0`, text: `訳 ${original}` });
+    });
+    expect(maximum).toBeGreaterThan(1);
+    expect(maximum).toBeLessThanOrEqual(4);
+  });
+
+  it('bounds repeated successful no-pair AUTO handoffs to one transport per batch', async () => {
+    installHttp();
+    const provider = await engine.getProvider();
+    const calls = vi.spyOn(provider, 'translate');
+    const pending = Array.from({ length: 8 }, (_, index) => runBatch(index, { sourceLanguage: 'auto', alreadyTranslated: true }));
+    await advance(5000);
+    const results = await Promise.all(pending);
+    expect(results.every(result => result.success)).toBe(true);
+    expect(attempts).toHaveLength(8);
+    expect(calls.mock.calls.map(call => call[1])).toEqual(Array(8).fill('auto'));
+    expect(maximum).toBe(1);
+    results.forEach((result, index) => {
+      expect(JSON.parse(result.translatedText)[0]).toEqual({ id: `unit-${index}-0`, text: `訳 すでに翻訳されたナビゲーション項目 ${index}/0` });
+    });
+    expect(state.activeRequests).toBe(0);
   });
 
   it('shares physical 429 cooldown with queued batches and the bounded queue retry', async () => {

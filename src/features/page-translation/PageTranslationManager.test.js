@@ -50,6 +50,10 @@ vi.mock('./PageTranslationHelper.js', () => ({
         this.setSettings = vi.fn();
         this.setTranslationState = vi.fn();
         this.enqueue = vi.fn();
+        this.recordRetainedTranslation = vi.fn(() => {
+          this.totalTasks++;
+          this.translatedCount++;
+        });
         this.translatedCount = 0;
         this.translationSessionId = null;
         this.sessionContext = null;
@@ -163,6 +167,11 @@ vi.mock('@/shared/logging/logger.js', () => ({
 const mockStorageManagerSet = vi.hoisted(() => vi.fn());
 const mockStorageManagerOn = vi.hoisted(() => vi.fn());
 const mockLoggerWarn = vi.hoisted(() => vi.fn());
+const mockSpaLoadFeature = vi.hoisted(() => vi.fn());
+const mockSpaSettingsManager = vi.hoisted(() => ({ get: vi.fn(), isExtensionEnabled: vi.fn() }));
+
+vi.mock('@/shared/managers/SettingsManager.js', () => ({ default: mockSpaSettingsManager }));
+vi.mock('@/core/content-scripts/chunks/lazy-features.js', () => ({ loadFeature: mockSpaLoadFeature }));
 
 vi.mock('@/shared/storage/core/StorageCore.js', () => ({
   storageManager: {
@@ -238,6 +247,137 @@ describe('PageTranslationManager', () => {
   });
 
   describe('Translation Lifecycle', () => {
+    it('shares the FeatureManager-owned page handler with the real lazy loader', async () => {
+      const { FeatureManager } = await vi.importActual('@/core/managers/content/FeatureManager.js');
+      const lazyFeatures = await vi.importActual('@/core/content-scripts/chunks/lazy-features.js');
+      const owner = FeatureManager.getInstance();
+      owner.initialized = true;
+      owner.exclusionChecker.isFeatureAllowed = vi.fn().mockResolvedValue(true);
+      const handler = await owner.loadFeatureHandler('pageTranslation');
+      owner.featureHandlers.set('pageTranslation', handler);
+      owner.activeFeatures.add('pageTranslation');
+      try {
+        expect(handler.featureManager).toBe(owner);
+        expect(await lazyFeatures.loadFeature('pageTranslation')).toBe(handler);
+        expect(owner.getFeatureHandler('pageTranslation')).toBe(handler);
+      } finally {
+        owner.featureHandlers.delete('pageTranslation');
+        owner.activeFeatures.delete('pageTranslation');
+        lazyFeatures.notifyFeatureDeactivated('pageTranslation');
+        await handler.cleanup();
+      }
+    });
+
+    it.each(['delayed notification', 'same-URL history update', 'history round trip'])(
+      'continues route B after %s without resending accepted nodes', async (navigation) => {
+      const previousLocation = window.location;
+      vi.unstubAllGlobals();
+      const { FeatureManager } = await vi.importActual('@/core/managers/content/FeatureManager.js');
+      const { PageTranslationBridge: RealBridge } = await vi.importActual('./PageTranslationBridge.js');
+      const { PageTranslationEventManager: RealEvents } = await vi.importActual('./utils/PageTranslationEventManager.js');
+      const { default: browser } = await import('webextension-polyfill');
+      const owner = FeatureManager.getInstance();
+      const oldUrl = window.location.href;
+      const settings = {
+        translationApi: 'custom', targetLanguage: 'fa', lazyLoading: false,
+        showOriginalOnHover: false, autoTranslateOnDOMChanges: true,
+        tokenWarningHidden: true,
+      };
+      PageTranslationSettingsLoader.load.mockResolvedValue(settings);
+      manager.featureManager = owner;
+      manager.bridge = new RealBridge();
+      manager.eventManager = new RealEvents(manager);
+      owner.featureHandlers.set('pageTranslation', manager);
+      owner.activeFeatures.add('pageTranslation');
+      owner._lastDetectedUrl = oldUrl;
+      owner.reevaluateFeatures = vi.fn().mockResolvedValue(undefined);
+      owner.exclusionChecker.isFeatureAllowed = vi.fn().mockResolvedValue(true);
+      mockSpaSettingsManager.isExtensionEnabled.mockReturnValue(true);
+      mockSpaSettingsManager.get.mockImplementation((key, fallback) => {
+        if (key === 'WHOLE_PAGE_AUTO_TRANSLATE_RULES') return [`${window.location.hostname}/*`];
+        return fallback;
+      });
+      mockSpaLoadFeature.mockResolvedValue(manager);
+      manager.scheduler.totalTasks = 0;
+      manager.scheduler.reset.mockImplementation(() => {
+        manager.scheduler.totalTasks = 0;
+        manager.scheduler.translatedCount = 0;
+      });
+      const pending = [];
+      manager.scheduler.enqueue.mockImplementation((text, context, _score, node) => new Promise(resolve => {
+        manager.scheduler.totalTasks++;
+        pending.push({ text, context, node, resolve });
+      }));
+      const starts = vi.fn();
+      sendRegularMessage.mockImplementation(async (message) => {
+        if (message.action === MessageActions.PAGE_TRANSLATE) {
+          starts();
+          return manager.translatePage(message.data);
+        }
+        return { success: true };
+      });
+      browser.runtime.id = 'test-extension';
+      try {
+        await manager.activate();
+        document.body.innerHTML = '<p id="accepted">Accepted route B source</p><p id="pending">Pending route B source</p>';
+        window.history.replaceState({}, '', new URL('/route-b', oldUrl).href);
+        await owner.checkForUrlChange();
+        await vi.waitFor(() => expect(pending).toHaveLength(2));
+        expect(manager.isAutoTranslating).toBe(true);
+        const result = (text) => ({
+          __pageTranslationSettlement: true, text, state: 'pending',
+          settle(outcome) { this.state = outcome; },
+        });
+        pending[0].resolve(result('Accepted route B translation'));
+        await vi.waitFor(() => expect(document.getElementById('accepted').textContent).toContain('Accepted route B translation'));
+        if (navigation === 'same-URL history update') window.history.replaceState({}, '', window.location.href);
+        if (navigation === 'history round trip') {
+          const route = window.location.href;
+          window.history.pushState({}, '', '/intermediate-route');
+          window.history.replaceState({}, '', route);
+        }
+
+        manager.eventManager.navigationListener({ action: MessageActions.SPA_NAVIGATION }, { id: browser.runtime.id });
+        await vi.waitFor(() => expect(manager.isAutoTranslating).toBe(true));
+        await vi.waitFor(() => expect(pending).toHaveLength(3));
+        expect(starts).toHaveBeenCalledTimes(2);
+        expect(manager.scheduler.recordRetainedTranslation).toHaveBeenCalledOnce();
+        expect(pending.filter(item => item.text === 'Accepted route B source')).toHaveLength(1);
+        expect(pending.some(item => item.text.includes('Accepted route B translation'))).toBe(false);
+        const fresh = result('Fresh route B translation');
+        const currentRequest = pending.at(-1);
+        currentRequest.resolve(fresh);
+        await vi.waitFor(() => expect(fresh.state).toBe('accepted'));
+        const old = result('Obsolete route B translation');
+        pending[1].resolve(old);
+        await vi.waitFor(() => expect(old.state).toBe('cancelled'));
+        expect(document.body.textContent).not.toContain('Obsolete');
+
+        const later = document.createElement('p');
+        later.textContent = 'Delayed route B source';
+        const requestCount = pending.length;
+        document.body.appendChild(later);
+        await vi.waitFor(() => expect(pending).toHaveLength(requestCount + 1));
+        pending.at(-1).resolve(result('Delayed route B translation'));
+        await vi.waitFor(() => expect(later.textContent).toContain('Delayed route B translation'));
+        await manager.restorePage({ manual: true });
+        expect(document.getElementById('accepted').textContent).toBe('Accepted route B source');
+        expect(document.getElementById('pending').textContent).toBe('Pending route B source');
+        expect(later.textContent).toBe('Delayed route B source');
+      } finally {
+        window.history.replaceState({}, '', oldUrl);
+        vi.stubGlobal('location', previousLocation);
+        owner.featureHandlers.delete('pageTranslation');
+        owner.activeFeatures.delete('pageTranslation');
+        PageTranslationSettingsLoader.load.mockResolvedValue({
+          targetLanguage: 'fa', translationApi: 'google', showOriginalOnHover: true,
+          autoTranslateOnDOMChanges: false,
+        });
+        sendRegularMessage.mockResolvedValue({ success: true });
+      }
+      }
+    );
+
     it('publishes aggregate lifecycle through trusted runtime transport', async () => {
       const data = { translatedCount: 2, totalCount: 3, frameUrl: 'fake' };
 
@@ -441,6 +581,7 @@ describe('PageTranslationManager', () => {
       
       expect(result.success).toBe(true);
       expect(manager.isAutoTranslating).toBe(false);
+      expect(manager.userRestoredOverride).toBe(true);
       expect(manager.bridge.stopPersistence).toHaveBeenCalled();
       expect(manager.bridge.restore).not.toHaveBeenCalled();
       expect(manager.bridge.cleanup).not.toHaveBeenCalled();

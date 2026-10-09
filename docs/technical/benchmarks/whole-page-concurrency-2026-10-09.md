@@ -1,6 +1,6 @@
 # Whole-page concurrency measurement (2026-10-09)
 
-Baseline: upstream `22ccf3711f7b827fe359094bb18336036813e2cd`, version 1.20.1. Fixed: this patch, including the duplicate-node guard. Windows Chrome 155, AI Agent test profile, Custom OpenAI-compatible provider and the same existing loopback proxy/model alias (`gpt-6-luna-low-fast`). The alias is not evidence of effective reasoning effort or service tier.
+Baseline: upstream `22ccf3711f7b827fe359094bb18336036813e2cd`, version 1.20.1. Measured fix: `6ff3a1eb63694fe7924bc325cb2d45acfd4c62c4`, including the duplicate-node guard. These timings precede the subsequent SPA followup and are not new measurements of that followup. Windows Chrome 155, AI Agent test profile, Custom OpenAI-compatible provider and the same existing loopback proxy/model alias (`gpt-6-luna-low-fast`). The alias is not evidence of effective reasoning effort or service tier.
 
 ## Controls and observation
 

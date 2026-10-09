@@ -221,6 +221,14 @@ export class PageTranslationScheduler extends ResourceTracker {
     }
   }
 
+  recordRetainedTranslation(context) {
+    if (!this.isTranslated || context !== this.sessionContext) return;
+    this.totalTasks++;
+    this.translatedCount++;
+    this._reportProgress();
+    this._checkCompletion();
+  }
+
   /**
    * Enqueue a text for translation with a given priority (score).
    * @param {string} text - Text to translate

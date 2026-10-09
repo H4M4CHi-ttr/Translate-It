@@ -71,6 +71,7 @@ import { FeatureManager } from './FeatureManager.js';
 describe('FeatureManager SPA auto page command transport', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    FeatureManager.getInstance().featureHandlers.clear();
     mocks.settingsManager.get.mockImplementation((key, fallback) => {
       if (key === 'WHOLE_PAGE_TRANSLATION_ENABLED') return true;
       if (key === 'WHOLE_PAGE_AUTO_TRANSLATE_RULES') return [{ pattern: 'example.com' }];
@@ -128,6 +129,80 @@ describe('FeatureManager SPA auto page command transport', () => {
     } finally {
       Object.defineProperty(window, 'top', { configurable: true, value: previousTop });
     }
+  });
+
+  const configureSameUrlPage = () => {
+    const owner = FeatureManager.getInstance();
+    owner._lastDetectedUrl = window.location.href;
+    const page = {
+      currentUrl: window.location.href, isActive: true, userRestoredOverride: false,
+      autoStartCancelledUrls: new Set(),
+      stopAutoTranslation: vi.fn().mockResolvedValue({ success: true }),
+    };
+    owner.featureHandlers.set('pageTranslation', page);
+    owner.reevaluateFeatures = vi.fn().mockResolvedValue(undefined);
+    mocks.loadFeature.mockResolvedValue(page);
+    return { owner, page };
+  };
+
+  it('invalidates synchronously before same-URL forced rule reevaluation and requests retained restart', async () => {
+    const { owner, page } = configureSameUrlPage();
+    const revision = owner._navigationRevision;
+    const pending = owner.checkForUrlChange({ force: true });
+
+    expect(owner._navigationRevision).toBe(revision + 1);
+    expect(page.stopAutoTranslation).toHaveBeenCalledExactlyOnceWith({ cancellationReason: 'operation-abort' });
+    expect(page.stopAutoTranslation.mock.invocationCallOrder[0]).toBeLessThan(owner.reevaluateFeatures.mock.invocationCallOrder[0]);
+    await pending;
+    expect(mocks.sendRegularMessage).toHaveBeenCalledExactlyOnceWith({
+      action: MessageActions.PAGE_TRANSLATE,
+      data: { isAuto: true, preserveAcceptedTranslations: true },
+    }, { returnFailureResponse: true });
+    expect(owner.checkForUrlChange()).toBe(false);
+    expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
+  });
+
+  it.each(['no-rule', 'disabled', 'extension-disabled', 'excluded', 'manual-restore', 'cancelled-url', 'iframe'])(
+    'does not auto restart a forced notification when %s', async (condition) => {
+      const { owner, page } = configureSameUrlPage();
+      const previousTop = window.top;
+      if (condition === 'no-rule') mocks.matchesAutoTranslateRule.mockReturnValue(false);
+      if (condition === 'disabled') mocks.settingsManager.get.mockImplementation((key, fallback) => key === 'WHOLE_PAGE_TRANSLATION_ENABLED' ? false : fallback);
+      if (condition === 'extension-disabled') mocks.settingsManager.isExtensionEnabled.mockReturnValue(false);
+      if (condition === 'excluded') mocks.exclusionChecker.isFeatureAllowed.mockResolvedValue(false);
+      if (condition === 'manual-restore') page.userRestoredOverride = true;
+      if (condition === 'cancelled-url') page.autoStartCancelledUrls.add(window.location.href);
+      if (condition === 'iframe') Object.defineProperty(window, 'top', { configurable: true, value: {} });
+      try {
+        await owner.checkForUrlChange({ force: true });
+        expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
+        expect(mocks.sendRegularMessage).not.toHaveBeenCalled();
+      } finally {
+        Object.defineProperty(window, 'top', { configurable: true, value: previousTop });
+      }
+    }
+  );
+
+  it('honors a manual stop while forced reevaluation is pending', async () => {
+    const { owner, page } = configureSameUrlPage();
+    let release;
+    owner.reevaluateFeatures.mockReturnValue(new Promise(resolve => { release = resolve; }));
+    const pending = owner.checkForUrlChange({ force: true });
+    page.userRestoredOverride = true;
+    release();
+    await pending;
+    expect(mocks.sendRegularMessage).not.toHaveBeenCalled();
+  });
+
+  it('lets only the newest forced navigation revision start translation', async () => {
+    const { owner } = configureSameUrlPage();
+    let release;
+    owner.reevaluateFeatures.mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
+    const obsolete = owner.checkForUrlChange({ force: true });
+    await owner.checkForUrlChange({ force: true });
+    release();
+    await obsolete;
+    expect(mocks.sendRegularMessage).toHaveBeenCalledOnce();
   });
 
   it('deduplicates URL signals with a synchronous shared snapshot', async () => {

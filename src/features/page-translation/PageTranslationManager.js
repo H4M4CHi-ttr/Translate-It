@@ -57,6 +57,7 @@ export class PageTranslationManager extends ResourceTracker {
     this._isCancelling = false;
     this.userRestoredOverride = false;
     this.autoStartCancelledUrls = new Set();
+    this.translationSettingsRevision = 0;
 
     
     this.scheduler = new PageTranslationScheduler({
@@ -271,7 +272,16 @@ export class PageTranslationManager extends ResourceTracker {
           }
           return this.scheduler.enqueue(text, context, score, node);
         },
-        attempt.sessionContext
+        attempt.sessionContext,
+        {
+          preserveAcceptedTranslations: !!options.isAuto && !!options.preserveAcceptedTranslations,
+          settingsRevision: this.translationSettingsRevision,
+          onRetainedTranslation: () => {
+            if (this._isCurrentPreStartAttempt(attempt)) {
+              this.scheduler.recordRetainedTranslation(attempt.sessionContext);
+            }
+          },
+        }
       );
       if (!this._isCurrentPreStartAttempt(attempt)) return this._settleStalePreStartAttempt(attempt);
       
@@ -518,6 +528,7 @@ export class PageTranslationManager extends ResourceTracker {
    * @param {string} [options.cancellationReason] - Remote cancellation reason
    */
   async stopAutoTranslation({ cancellationReason = ActionReasons.USER_STOPPED_PAGE_TRANSLATION } = {}) {
+    if (cancellationReason === ActionReasons.USER_STOPPED_PAGE_TRANSLATION) this.userRestoredOverride = true;
     // Lazy nodes can still own a live session after presentation becomes idle.
     if (!this.isAutoTranslating && !this.isTranslating
         && !this.scheduler.isTranslated && !this.bridge.session?.active) {

@@ -57,6 +57,7 @@ describe('PageTranslationEventManager', () => {
         warn: vi.fn()
       },
       addEventListener: vi.fn((target, _event, handler) => target.addListener(handler)),
+      featureManager: { checkForUrlChange: vi.fn().mockResolvedValue(undefined) },
       removeEventListener: vi.fn((target, _event, handler) => target.removeListener(handler)),
       settings: {
         scrollStopDelay: 500,
@@ -83,13 +84,14 @@ describe('PageTranslationEventManager', () => {
   });
 
   describe('Trusted SPA navigation', () => {
-    it('stops immediately even if an A-B-A navigation ends on the original URL', () => {
+    it('delegates even a same-URL notification to the navigation owner', () => {
       mockManager.currentUrl = window.location.href;
       mockManager.isTranslating = true;
       const callback = mockManager.addEventListener.mock.calls[0][2];
 
       expect(callback({ action: MessageActions.SPA_NAVIGATION }, { id: browser.runtime.id })).toBeUndefined();
-      expect(mockManager.stopAutoTranslation).toHaveBeenCalledWith({ cancellationReason: 'operation-abort' });
+      expect(mockManager.featureManager.checkForUrlChange).toHaveBeenCalledExactlyOnceWith({ force: true });
+      expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
       expect(mockManager.currentUrl).toBe(window.location.href);
     });
 
@@ -99,6 +101,7 @@ describe('PageTranslationEventManager', () => {
       { id: 'test-extension', tab: { id: 1 } },
     ])('ignores an untrusted navigation sender %o', (sender) => {
       mockManager.addEventListener.mock.calls[0][2]({ action: MessageActions.SPA_NAVIGATION }, sender);
+      expect(mockManager.featureManager.checkForUrlChange).not.toHaveBeenCalled();
       expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
     });
 
