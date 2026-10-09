@@ -159,15 +159,14 @@ export class PageTranslationBridge extends ResourceTracker {
 
   async initialize(settings, onTranslateCallback, sessionContext = null, {
     preserveAcceptedTranslations = false, onRetainedTranslation = null, settingsRevision = 0,
-    acceptedTranslationSnapshot = null,
   } = {}) {
-    const previous = acceptedTranslationSnapshot || (preserveAcceptedTranslations && this.session ? {
+    const previous = preserveAcceptedTranslations && this.session ? {
       nodeStorage: this.session.nodesTranslator?.nodeStorage,
       document: this.session.root?.ownerDocument,
       translationApi: this.session.translationApi,
       targetLanguage: this.session.targetLanguage,
       settingsRevision: this.session.settingsRevision,
-    } : null);
+    } : null;
     const previousStorage = preserveAcceptedTranslations
       && previous?.document === document
       && previous.targetLanguage === settings.targetLanguage
@@ -512,6 +511,16 @@ export class PageTranslationBridge extends ResourceTracker {
 
       restore(node, callback) {
         const nodeData = this.nodeStorage.get(node);
+        const accepted = nodeData?.acceptedTranslation;
+        // A stopped SPA owner may outlive host edits while its replacement loads.
+        if (!currentSession.active && (!isConnectedTarget(node)
+            || node.ownerDocument !== document
+            || !accepted || nodeData.updateId !== accepted.updateId
+            || getCurrentNodeValue(node) !== accepted.text)) {
+          this.nodeStorage.delete(node);
+          callback?.(node);
+          return;
+        }
         if (node?.nodeType === Node.ATTRIBUTE_NODE && nodeData) {
           if (nodeData.originalText !== null) setCurrentNodeValue(node, nodeData.originalText);
           this.nodeStorage.delete(node);

@@ -37,11 +37,14 @@ export function ContentScriptCore() {
       return { success: true };
     });
 
-    this.messageHandler.registerHandler(MessageActions.SPA_NAVIGATION, async () => {
+    this.messageHandler.registerHandler(MessageActions.SPA_NAVIGATION, async (message) => {
       const { FeatureManager } = await import('@/core/managers/content/FeatureManager.js');
       const featureManager = FeatureManager.getInstance();
       await featureManager.initialize();
-      await featureManager.checkForUrlChange();
+      await featureManager.checkForUrlChange({
+        navigationUrl: message?.data?.url,
+        navigationTimeStamp: message?.data?.timeStamp,
+      });
       return { success: true };
     });
   };

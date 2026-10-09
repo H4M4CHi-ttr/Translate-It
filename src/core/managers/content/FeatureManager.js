@@ -32,6 +32,7 @@ export class FeatureManager extends ResourceTracker {
     this._evaluationQueue = [];
     this._evaluationDebounceTimer = null;
     this._lastDetectedUrl = window.location.href;
+    this._lastSpaNavigation = { url: window.location.href, timeStamp: -Infinity };
     this._featureRevisions = new Map();
     this._activationPromises = new Map();
     this._navigationRevision = 0;
@@ -831,9 +832,17 @@ export class FeatureManager extends ResourceTracker {
     }
   }
 
-  checkForUrlChange({ force = false } = {}) {
+  checkForUrlChange({ navigationUrl, navigationTimeStamp } = {}) {
     const newUrl = window.location.href;
-    if (!force && newUrl === this._lastDetectedUrl) return false;
+    let missedNavigation = false;
+    if (typeof navigationUrl === 'string' && navigationUrl
+        && Number.isFinite(navigationTimeStamp)
+        && navigationTimeStamp >= this._lastSpaNavigation.timeStamp) {
+      // Browser timestamps deduplicate receivers; only URL evidence can reveal a missed round trip.
+      missedNavigation = navigationUrl !== this._lastSpaNavigation.url && navigationUrl !== newUrl;
+      this._lastSpaNavigation = { url: navigationUrl, timeStamp: navigationTimeStamp };
+    }
+    if (!missedNavigation && newUrl === this._lastDetectedUrl) return false;
 
     const oldUrl = this._lastDetectedUrl;
     this._lastDetectedUrl = newUrl;

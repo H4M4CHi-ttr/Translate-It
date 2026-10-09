@@ -71,7 +71,9 @@ import { FeatureManager } from './FeatureManager.js';
 describe('FeatureManager SPA auto page command transport', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    FeatureManager.getInstance().featureHandlers.clear();
+    const owner = FeatureManager.getInstance();
+    owner.featureHandlers.clear();
+    owner._lastSpaNavigation = { url: window.location.href, timeStamp: -Infinity };
     mocks.settingsManager.get.mockImplementation((key, fallback) => {
       if (key === 'WHOLE_PAGE_TRANSLATION_ENABLED') return true;
       if (key === 'WHOLE_PAGE_AUTO_TRANSLATE_RULES') return [{ pattern: 'example.com' }];
@@ -134,6 +136,7 @@ describe('FeatureManager SPA auto page command transport', () => {
   const configureSameUrlPage = () => {
     const owner = FeatureManager.getInstance();
     owner._lastDetectedUrl = window.location.href;
+    owner._lastSpaNavigation = { url: window.location.href, timeStamp: -Infinity };
     const page = {
       currentUrl: window.location.href, isActive: true, userRestoredOverride: false,
       autoStartCancelledUrls: new Set(),
@@ -145,10 +148,87 @@ describe('FeatureManager SPA auto page command transport', () => {
     return { owner, page };
   };
 
-  it('invalidates synchronously before same-URL forced rule reevaluation and requests retained restart', async () => {
+  const historyNotification = (timeStamp = 1) => ({
+    navigationUrl: new URL('/intermediate-route', window.location.href).href,
+    navigationTimeStamp: timeStamp,
+  });
+
+  it('keeps pending translation for same-URL state updates and legacy notifications', async () => {
     const { owner, page } = configureSameUrlPage();
     const revision = owner._navigationRevision;
-    const pending = owner.checkForUrlChange({ force: true });
+    expect(owner.checkForUrlChange({ navigationUrl: window.location.href, navigationTimeStamp: 1 })).toBe(false);
+    expect(owner.checkForUrlChange({ navigationUrl: window.location.href, navigationTimeStamp: 2 })).toBe(false);
+    expect(owner.checkForUrlChange()).toBe(false);
+    expect(owner._navigationRevision).toBe(revision);
+    expect(page.stopAutoTranslation).not.toHaveBeenCalled();
+    expect(mocks.sendRegularMessage).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates the same history event across synchronous and asynchronous receivers', async () => {
+    const { owner, page } = configureSameUrlPage();
+    const event = historyNotification(10);
+    const pending = owner.checkForUrlChange(event);
+    expect(owner.checkForUrlChange(event)).toBe(false);
+    await pending;
+    expect(owner.checkForUrlChange(event)).toBe(false);
+    expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
+    expect(mocks.sendRegularMessage).toHaveBeenCalledOnce();
+  });
+
+  it('does not repeat a conservative restart for queued state updates to an old URL', async () => {
+    const { owner, page } = configureSameUrlPage();
+    await owner.checkForUrlChange(historyNotification(10));
+    expect(owner.checkForUrlChange(historyNotification(11))).toBe(false);
+    expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
+  });
+
+  it('recognizes distinct browser URL evidence even when timestamps have equal resolution', async () => {
+    const { owner, page } = configureSameUrlPage();
+    await owner.checkForUrlChange({ navigationUrl: window.location.href, navigationTimeStamp: 10 });
+    await owner.checkForUrlChange(historyNotification(10));
+    expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
+  });
+
+  it('ignores an out-of-order event without hiding an actual current URL change', async () => {
+    const { owner, page } = configureSameUrlPage();
+    await owner.checkForUrlChange({ navigationUrl: window.location.href, navigationTimeStamp: 20 });
+    expect(owner.checkForUrlChange(historyNotification(10))).toBe(false);
+    expect(page.stopAutoTranslation).not.toHaveBeenCalled();
+    const oldUrl = window.location.href;
+    try {
+      window.history.replaceState({}, '', '/newest-route');
+      await owner.checkForUrlChange(historyNotification(10));
+      expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
+      expect(owner._lastDetectedUrl).toBe(window.location.href);
+    } finally {
+      window.history.replaceState({}, '', oldUrl);
+    }
+  });
+
+  it('uses an intermediate URL as round-trip evidence and keeps the live URL authoritative', async () => {
+    const { owner, page } = configureSameUrlPage();
+    const currentUrl = window.location.href;
+    await owner.checkForUrlChange(historyNotification(30));
+    expect(owner._lastDetectedUrl).toBe(currentUrl);
+    expect(owner.checkForUrlChange({ navigationUrl: currentUrl, navigationTimeStamp: 31 })).toBe(false);
+    expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
+    expect(mocks.exclusionChecker.updateUrl).toHaveBeenCalledWith(currentUrl);
+  });
+
+  it.each([
+    { navigationUrl: {}, navigationTimeStamp: 1 },
+    { navigationUrl: 'https://example.com/other', navigationTimeStamp: undefined },
+    { navigationUrl: 'https://example.com/other', navigationTimeStamp: NaN },
+  ])('does not force a same-URL restart from incomplete event evidence %o', (event) => {
+    const { owner, page } = configureSameUrlPage();
+    expect(owner.checkForUrlChange(event)).toBe(false);
+    expect(page.stopAutoTranslation).not.toHaveBeenCalled();
+  });
+
+  it('invalidates synchronously for a missed round trip and requests retained restart', async () => {
+    const { owner, page } = configureSameUrlPage();
+    const revision = owner._navigationRevision;
+    const pending = owner.checkForUrlChange(historyNotification());
 
     expect(owner._navigationRevision).toBe(revision + 1);
     expect(page.stopAutoTranslation).toHaveBeenCalledExactlyOnceWith({ cancellationReason: 'operation-abort' });
@@ -163,7 +243,7 @@ describe('FeatureManager SPA auto page command transport', () => {
   });
 
   it.each(['no-rule', 'disabled', 'extension-disabled', 'excluded', 'manual-restore', 'cancelled-url', 'iframe'])(
-    'does not auto restart a forced notification when %s', async (condition) => {
+    'does not auto restart a missed round trip when %s', async (condition) => {
       const { owner, page } = configureSameUrlPage();
       const previousTop = window.top;
       if (condition === 'no-rule') mocks.matchesAutoTranslateRule.mockReturnValue(false);
@@ -174,7 +254,7 @@ describe('FeatureManager SPA auto page command transport', () => {
       if (condition === 'cancelled-url') page.autoStartCancelledUrls.add(window.location.href);
       if (condition === 'iframe') Object.defineProperty(window, 'top', { configurable: true, value: {} });
       try {
-        await owner.checkForUrlChange({ force: true });
+        await owner.checkForUrlChange(historyNotification());
         expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
         expect(mocks.sendRegularMessage).not.toHaveBeenCalled();
       } finally {
@@ -183,23 +263,23 @@ describe('FeatureManager SPA auto page command transport', () => {
     }
   );
 
-  it('honors a manual stop while forced reevaluation is pending', async () => {
+  it('honors a manual stop while round-trip reevaluation is pending', async () => {
     const { owner, page } = configureSameUrlPage();
     let release;
     owner.reevaluateFeatures.mockReturnValue(new Promise(resolve => { release = resolve; }));
-    const pending = owner.checkForUrlChange({ force: true });
+    const pending = owner.checkForUrlChange(historyNotification());
     page.userRestoredOverride = true;
     release();
     await pending;
     expect(mocks.sendRegularMessage).not.toHaveBeenCalled();
   });
 
-  it('lets only the newest forced navigation revision start translation', async () => {
+  it('lets only the newest evidenced navigation revision start translation', async () => {
     const { owner } = configureSameUrlPage();
     let release;
     owner.reevaluateFeatures.mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
-    const obsolete = owner.checkForUrlChange({ force: true });
-    await owner.checkForUrlChange({ force: true });
+    const obsolete = owner.checkForUrlChange(historyNotification(1));
+    await owner.checkForUrlChange({ ...historyNotification(2), navigationUrl: new URL('/another-intermediate-route', window.location.href).href });
     release();
     await obsolete;
     expect(mocks.sendRegularMessage).toHaveBeenCalledOnce();

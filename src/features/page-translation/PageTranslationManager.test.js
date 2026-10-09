@@ -1,5 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+vi.mock('@/config.js', async (importOriginal) => {
+  const config = await importOriginal();
+  const getters = [
+    'getWholePageRootMarginAsync', 'getModeProvidersAsync', 'getTranslationApiAsync',
+    'getTargetLanguageAsync', 'getWholePageLazyLoadingAsync',
+    'getWholePageAutoTranslateOnDOMChangesAsync', 'getWholePageExcludedSelectorsAsync',
+    'getWholePageAttributesToTranslateAsync', 'getWholePageShowOriginalOnHoverAsync',
+    'getWholePageTranslateAfterScrollStopAsync', 'getWholePageScrollStopDelayAsync',
+    'getWholePageTokenWarningHiddenAsync', 'getAIContextTranslationEnabledAsync',
+    'getWholePageUseTranslationFontAsync',
+  ];
+  return { ...config, ...Object.fromEntries(getters.map(key => [key, vi.fn()])) };
+});
+
 vi.mock('@/features/translation/providers/ProviderManifest.js', () => ({
   findProviderById: vi.fn().mockReturnValue({ displayName: 'Google', consumesTokens: false })
 }));
@@ -225,6 +239,10 @@ describe('PageTranslationManager', () => {
 
   afterEach(async () => {
     await manager.cleanup();
+    PageTranslationSettingsLoader.load.mockResolvedValue({
+      targetLanguage: 'fa', translationApi: 'google', showOriginalOnHover: true,
+      autoTranslateOnDOMChanges: false,
+    });
   });
 
   describe('Activation', () => {
@@ -247,6 +265,226 @@ describe('PageTranslationManager', () => {
   });
 
   describe('Translation Lifecycle', () => {
+    const acceptedSettings = {
+      translationApi: 'custom', targetLanguage: 'fa', lazyLoading: false,
+      showOriginalOnHover: false, autoTranslateOnDOMChanges: true,
+      tokenWarningHidden: true, usesGlobalProvider: false, isExplicitProvider: false,
+    };
+
+    const useActualSettingsLoader = async (modeProviders = {}) => {
+      const config = await import('@/config.js');
+      const { PageTranslationSettingsLoader: ActualLoader } = await vi.importActual('./utils/PageTranslationSettingsLoader.js');
+      const values = {
+        getWholePageRootMarginAsync: 150, getModeProvidersAsync: modeProviders,
+        getTranslationApiAsync: 'google', getTargetLanguageAsync: 'fa',
+        getWholePageLazyLoadingAsync: false, getWholePageAutoTranslateOnDOMChangesAsync: true,
+        getWholePageExcludedSelectorsAsync: [], getWholePageAttributesToTranslateAsync: [],
+        getWholePageShowOriginalOnHoverAsync: false, getWholePageTranslateAfterScrollStopAsync: false,
+        getWholePageScrollStopDelayAsync: 500, getWholePageTokenWarningHiddenAsync: true,
+        getAIContextTranslationEnabledAsync: true, getWholePageUseTranslationFontAsync: false,
+      };
+      for (const [key, value] of Object.entries(values)) config[key].mockResolvedValue(value);
+      PageTranslationSettingsLoader.load.mockImplementation(options => ActualLoader.load(options));
+      const { PageTranslationEventManager: ActualEvents } = await vi.importActual('./utils/PageTranslationEventManager.js');
+      manager.eventManager = new ActualEvents(manager);
+      return { config, handlers: new Map(mockStorageManagerOn.mock.calls) };
+    };
+
+    it('retains accepted originals when another real route supersedes pending settings', async () => {
+      const previousLocation = window.location;
+      vi.unstubAllGlobals();
+      const originalUrl = window.location.href;
+      const { PageTranslationBridge: ActualBridge } = await vi.importActual('./PageTranslationBridge.js');
+      manager.bridge = new ActualBridge();
+      PageTranslationSettingsLoader.load.mockResolvedValue(acceptedSettings);
+      const requests = [];
+      manager.scheduler.enqueue.mockImplementation(text => new Promise(resolve => requests.push({ text, resolve })));
+      const accepted = text => ({
+        __pageTranslationSettlement: true, text, state: 'pending',
+        settle(outcome) { this.state = outcome; },
+      });
+      try {
+        document.body.innerHTML = '<nav>Shared original route A source</nav>';
+        await manager.translatePage({ isAuto: true });
+        await vi.waitFor(() => expect(requests).toHaveLength(1));
+        requests[0].resolve(accepted('Shared translated navigation'));
+        await vi.waitFor(() => expect(document.querySelector('nav').textContent).toContain('Shared translated navigation'));
+        const routeBSettings = createDeferred();
+        PageTranslationSettingsLoader.load.mockImplementationOnce(() => routeBSettings.promise);
+        await manager.stopAutoTranslation({ cancellationReason: 'operation-abort' });
+        window.history.replaceState({}, '', '/route-b');
+        const routeB = manager.translatePage({ isAuto: true, preserveAcceptedTranslations: true });
+        await vi.waitFor(() => expect(PageTranslationSettingsLoader.load).toHaveBeenCalledTimes(2));
+        const routeBController = manager.abortController;
+        await manager.stopAutoTranslation({ cancellationReason: 'operation-abort' });
+        window.history.replaceState({}, '', '/route-c');
+        const routeC = await manager.translatePage({ isAuto: true, preserveAcceptedTranslations: true });
+        expect(routeC.success).toBe(true);
+        expect(routeBController.signal.aborted).toBe(true);
+        expect(manager.scheduler.recordRetainedTranslation).toHaveBeenCalledOnce();
+        expect(requests).toHaveLength(1);
+        routeBSettings.resolve({ ...acceptedSettings, translationApi: 'google' });
+        expect((await routeB).success).toBe(false);
+        expect(manager.settings.translationApi).toBe('custom');
+        await manager.restorePage({ manual: true });
+        expect(document.querySelector('nav').textContent).toBe('Shared original route A source');
+      } finally {
+        window.history.replaceState({}, '', originalUrl);
+        vi.stubGlobal('location', previousLocation);
+        PageTranslationSettingsLoader.load.mockResolvedValue({
+          targetLanguage: 'fa', translationApi: 'google', showOriginalOnHover: true,
+          autoTranslateOnDOMChanges: false,
+        });
+      }
+    });
+
+    it.each(['unchanged', 'edited'])('restores only owned %s text during pending route initialization', async kind => {
+      const previousLocation = window.location;
+      vi.unstubAllGlobals();
+      const originalUrl = window.location.href;
+      const { PageTranslationBridge: ActualBridge } = await vi.importActual('./PageTranslationBridge.js');
+      manager.bridge = new ActualBridge();
+      PageTranslationSettingsLoader.load.mockResolvedValue(acceptedSettings);
+      manager.scheduler.enqueue.mockResolvedValue({
+        __pageTranslationSettlement: true, text: 'Accepted translation', state: 'pending',
+        settle(outcome) { this.state = outcome; },
+      });
+      try {
+        document.body.innerHTML = '<p>Original source</p>';
+        await manager.translatePage({ isAuto: true });
+        await vi.waitFor(() => expect(document.querySelector('p').textContent).toContain('Accepted translation'));
+        const pendingSettings = createDeferred();
+        PageTranslationSettingsLoader.load.mockImplementationOnce(() => pendingSettings.promise);
+        await manager.stopAutoTranslation({ cancellationReason: 'operation-abort' });
+        window.history.replaceState({}, '', '/pending-restored-route');
+        const attempt = manager.translatePage({ isAuto: true, preserveAcceptedTranslations: true });
+        await vi.waitFor(() => expect(PageTranslationSettingsLoader.load).toHaveBeenCalledTimes(2));
+        if (kind === 'edited') document.querySelector('p').firstChild.nodeValue = 'Current route host edit';
+        await manager.restorePage({ manual: true });
+        expect(document.querySelector('p').textContent).toBe(kind === 'edited' ? 'Current route host edit' : 'Original source');
+        pendingSettings.resolve(acceptedSettings);
+        expect((await attempt).success).toBe(false);
+        expect(manager.bridge.session).toBeNull();
+        expect(manager.userRestoredOverride).toBe(true);
+      } finally {
+        window.history.replaceState({}, '', originalUrl);
+        vi.stubGlobal('location', previousLocation);
+      }
+    });
+
+    it('rejects a pending global-dependent load after the global provider changes', async () => {
+      manager.settings = acceptedSettings;
+      const { config, handlers } = await useActualSettingsLoader();
+      const optionalFont = createDeferred();
+      config.getWholePageUseTranslationFontAsync.mockImplementation(() => optionalFont.promise);
+      const attempt = manager.translatePage({ isAuto: true });
+      await vi.waitFor(() => expect(config.getWholePageUseTranslationFontAsync).toHaveBeenCalledOnce());
+      const controller = manager.abortController;
+      config.getTranslationApiAsync.mockResolvedValue('gemini');
+      handlers.get('change:TRANSLATION_API')({ oldValue: 'google', newValue: 'gemini' });
+      expect(controller.signal.aborted).toBe(true);
+      expect(manager.translationSettingsRevision).toBe(1);
+      optionalFont.resolve(false);
+      expect((await attempt).success).toBe(false);
+      expect(manager.bridge.initialize).not.toHaveBeenCalled();
+      expect(pageEventBus.emit.mock.calls.some(([action]) => action === MessageActions.PAGE_TRANSLATE_START)).toBe(false);
+    });
+
+    it.each(['TRANSLATION_API', 'MODE_PROVIDERS'])(
+      'keeps a pending explicit provider when unrelated %s changes', async key => {
+        const { config, handlers } = await useActualSettingsLoader();
+        const optionalFont = createDeferred();
+        config.getWholePageUseTranslationFontAsync.mockImplementation(() => optionalFont.promise);
+        const attempt = manager.translatePage({ isAuto: true, provider: 'custom' });
+        await vi.waitFor(() => expect(config.getWholePageUseTranslationFontAsync).toHaveBeenCalledOnce());
+        const controller = manager.abortController;
+        handlers.get(`change:${key}`)(key === 'TRANSLATION_API'
+          ? { oldValue: 'google', newValue: 'gemini' }
+          : { oldValue: {}, newValue: { [config.TranslationMode.Page]: 'gemini' } });
+        expect(controller.signal.aborted).toBe(false);
+        expect(manager.translationSettingsRevision).toBe(0);
+        optionalFont.resolve(false);
+        expect((await attempt).success).toBe(true);
+        expect(manager.settings).toMatchObject({ translationApi: 'custom', isExplicitProvider: true });
+      }
+    );
+
+    it('keeps an accepted explicit provider when the Page default changes', async () => {
+      const { config, handlers } = await useActualSettingsLoader();
+      await manager.translatePage({ isAuto: true, provider: 'custom' });
+      const controller = manager.abortController;
+      handlers.get('change:MODE_PROVIDERS')({ oldValue: {}, newValue: { [config.TranslationMode.Page]: 'gemini' } });
+      expect(controller.signal.aborted).toBe(false);
+      expect(manager.isAutoTranslating).toBe(true);
+      expect(manager.settings.translationApi).toBe('custom');
+    });
+
+    it('keeps explicit provider precedence while resolving a feature conflict before settings load', async () => {
+      const { config, handlers } = await useActualSettingsLoader();
+      const conflict = createDeferred();
+      manager.featureManager = { resolveFeatureConflict: vi.fn(() => conflict.promise) };
+      const attempt = manager.translatePage({ isAuto: true, provider: 'custom' });
+      expect(manager.featureManager.resolveFeatureConflict).toHaveBeenCalledOnce();
+      expect(PageTranslationSettingsLoader.load).not.toHaveBeenCalled();
+      handlers.get('change:TRANSLATION_API')({ oldValue: 'google', newValue: 'gemini' });
+      handlers.get('change:MODE_PROVIDERS')({ oldValue: {}, newValue: { [config.TranslationMode.Page]: 'gemini' } });
+      expect(manager.translationSettingsRevision).toBe(0);
+      conflict.resolve();
+      expect((await attempt).success).toBe(true);
+      expect(manager.settings.translationApi).toBe('custom');
+    });
+
+    it.each(['stop', 'restore', 'cancel', 'internal stop'])(
+      'does not restart after %s during the first feature conflict wait', async action => {
+        const conflict = createDeferred();
+        manager.featureManager = { resolveFeatureConflict: vi.fn(() => conflict.promise) };
+        const attempt = manager.translatePage({ isAuto: true });
+        const controller = manager.abortController;
+        if (action === 'restore') await manager.restorePage({ manual: true });
+        else if (action === 'cancel') manager.cancelTranslation({ manual: true });
+        else await manager.stopAutoTranslation(action === 'internal stop' ? { cancellationReason: 'operation-abort' } : {});
+        conflict.resolve();
+        expect((await attempt).success).toBe(false);
+        expect(PageTranslationSettingsLoader.load).not.toHaveBeenCalled();
+        expect(pageEventBus.emit.mock.calls.some(([event]) => event === MessageActions.PAGE_TRANSLATE_START)).toBe(false);
+        expect(manager.userRestoredOverride).toBe(action !== 'internal stop');
+        expect(manager.pendingSettingsAttempt).toBeNull();
+        expect(controller.signal.aborted).toBe(true);
+      }
+    );
+
+    it('leaves a fresh accepted session intact when a cancelled first feature conflict wait resolves', async () => {
+      const conflict = createDeferred();
+      manager.featureManager = {
+        resolveFeatureConflict: vi.fn().mockImplementationOnce(() => conflict.promise).mockResolvedValue(undefined),
+      };
+      const obsolete = manager.translatePage({ isAuto: true });
+      await manager.stopAutoTranslation({ cancellationReason: 'operation-abort' });
+      const fresh = await manager.translatePage({ isAuto: true });
+      expect(fresh.success).toBe(true);
+      const freshController = manager.abortController;
+      const freshContext = manager.sessionContext;
+      conflict.resolve();
+      expect((await obsolete).success).toBe(false);
+      expect(manager.abortController).toBe(freshController);
+      expect(manager.sessionContext).toBe(freshContext);
+      expect(manager.translationMessageId).toBe(fresh.messageId);
+      expect(manager.isTranslating).toBe(true);
+      expect(PageTranslationSettingsLoader.load).toHaveBeenCalledOnce();
+      expect(pageEventBus.emit.mock.calls.filter(([event]) => event === MessageActions.PAGE_TRANSLATE_START)).toHaveLength(1);
+    });
+
+    it('releases preparation ownership when the first feature conflict wait rejects', async () => {
+      const error = new Error('Feature conflict failed');
+      manager.featureManager = { resolveFeatureConflict: vi.fn().mockRejectedValue(error) };
+      await expect(manager.translatePage({ isAuto: true })).rejects.toThrow(error);
+      expect(manager.pendingSettingsAttempt).toBeNull();
+      expect(manager.abortController).toBeNull();
+      expect(manager.isTranslating).toBe(false);
+      expect(PageTranslationSettingsLoader.load).not.toHaveBeenCalled();
+      expect(pageEventBus.emit.mock.calls.some(([event]) => event === MessageActions.PAGE_TRANSLATE_START)).toBe(false);
+    });
+
     it('shares the FeatureManager-owned page handler with the real lazy loader', async () => {
       const { FeatureManager } = await vi.importActual('@/core/managers/content/FeatureManager.js');
       const lazyFeatures = await vi.importActual('@/core/content-scripts/chunks/lazy-features.js');
@@ -290,6 +528,7 @@ describe('PageTranslationManager', () => {
       owner.featureHandlers.set('pageTranslation', manager);
       owner.activeFeatures.add('pageTranslation');
       owner._lastDetectedUrl = oldUrl;
+      owner._lastSpaNavigation = { url: oldUrl, timeStamp: -Infinity };
       owner.reevaluateFeatures = vi.fn().mockResolvedValue(undefined);
       owner.exclusionChecker.isFeatureAllowed = vi.fn().mockResolvedValue(true);
       mockSpaSettingsManager.isExtensionEnabled.mockReturnValue(true);
@@ -338,20 +577,29 @@ describe('PageTranslationManager', () => {
           window.history.replaceState({}, '', route);
         }
 
-        manager.eventManager.navigationListener({ action: MessageActions.SPA_NAVIGATION }, { id: browser.runtime.id });
+        const restarts = navigation === 'history round trip' || navigation === 'next SPA route';
+        const controller = manager.abortController;
+        const navigationUrl = navigation === 'history round trip'
+          ? new URL('/intermediate-route', oldUrl).href : window.location.href;
+        manager.eventManager.navigationListener({
+          action: MessageActions.SPA_NAVIGATION, data: { url: navigationUrl, timeStamp: 100 },
+        }, { id: browser.runtime.id });
         await vi.waitFor(() => expect(manager.isAutoTranslating).toBe(true));
-        await vi.waitFor(() => expect(pending).toHaveLength(3));
-        expect(starts).toHaveBeenCalledTimes(2);
-        expect(manager.scheduler.recordRetainedTranslation).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(pending).toHaveLength(restarts ? 3 : 2));
+        expect(controller.signal.aborted).toBe(restarts);
+        expect(starts).toHaveBeenCalledTimes(restarts ? 2 : 1);
+        expect(manager.scheduler.recordRetainedTranslation).toHaveBeenCalledTimes(restarts ? 1 : 0);
         expect(pending.filter(item => item.text === 'Accepted route B source')).toHaveLength(1);
         expect(pending.some(item => item.text.includes('Accepted route B translation'))).toBe(false);
         const fresh = result('Fresh route B translation');
         const currentRequest = pending.at(-1);
         currentRequest.resolve(fresh);
         await vi.waitFor(() => expect(fresh.state).toBe('accepted'));
-        const old = result('Obsolete route B translation');
-        pending[1].resolve(old);
-        await vi.waitFor(() => expect(old.state).toBe('cancelled'));
+        if (restarts) {
+          const old = result('Obsolete route B translation');
+          pending[1].resolve(old);
+          await vi.waitFor(() => expect(old.state).toBe('cancelled'));
+        }
         expect(document.body.textContent).not.toContain('Obsolete');
 
         const later = document.createElement('p');
@@ -437,7 +685,7 @@ describe('PageTranslationManager', () => {
       { isAuto: true, preserveAcceptedTranslations: true },
       { isAuto: false, preserveAcceptedTranslations: true },
       { isAuto: true, preserveAcceptedTranslations: false },
-    ])('passes only a bounded accepted snapshot across cleanup for %j', async (options) => {
+    ])('keeps only the stopped Bridge restore owner for %j', async (options) => {
       await manager.activate();
       manager.currentUrl = 'https://old.example/';
       const previousController = new AbortController();
@@ -456,10 +704,11 @@ describe('PageTranslationManager', () => {
 
       const bridgeOptions = manager.bridge.initialize.mock.calls[0][3];
       expect(previousController.signal.aborted).toBe(true);
-      expect(manager.bridge.cleanup.mock.invocationCallOrder[0]).toBeLessThan(manager.bridge.initialize.mock.invocationCallOrder[0]);
-      expect(bridgeOptions.acceptedTranslationSnapshot).toEqual(
-        options.isAuto && options.preserveAcceptedTranslations ? snapshot : null
-      );
+      const preserve = options.isAuto && options.preserveAcceptedTranslations;
+      expect(bridgeOptions.preserveAcceptedTranslations).toBe(preserve);
+      expect(manager.bridge.stopPersistence).toHaveBeenCalledTimes(preserve ? 1 : 0);
+      expect(manager.bridge.cleanup).toHaveBeenCalledTimes(preserve ? 0 : 1);
+      expect(manager.bridge.session?.nodesTranslator.nodeStorage).toBe(preserve ? snapshot.nodeStorage : undefined);
       expect(manager.abortController).not.toBe(previousController);
       expect(manager.sessionContext).not.toBe(manager.bridge.session?.context);
     });

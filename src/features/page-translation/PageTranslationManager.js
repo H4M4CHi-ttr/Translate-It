@@ -58,6 +58,7 @@ export class PageTranslationManager extends ResourceTracker {
     this.userRestoredOverride = false;
     this.autoStartCancelledUrls = new Set();
     this.translationSettingsRevision = 0;
+    this.pendingSettingsAttempt = null;
 
     
     this.scheduler = new PageTranslationScheduler({
@@ -113,19 +114,9 @@ export class PageTranslationManager extends ResourceTracker {
 
   async translatePage(options = {}) {
     let hasAcceptedStart = false;
-    // Keep only accepted node records across the eager SPA session cleanup.
-    const acceptedTranslationSnapshot = options.isAuto && options.preserveAcceptedTranslations && this.bridge.session
-      ? {
-        nodeStorage: this.bridge.session.nodesTranslator?.nodeStorage,
-        document: this.bridge.session.root?.ownerDocument,
-        translationApi: this.bridge.session.translationApi,
-        targetLanguage: this.bridge.session.targetLanguage,
-        settingsRevision: this.bridge.session.settingsRevision,
-      } : null;
-
     // 1. Check for URL change - ALWAYS reset for a clean slate in SPAs
     if (this.currentUrl !== window.location.href) {
-      this.resetLocalState();
+      this.resetLocalState({ preserveAcceptedTranslations: !!options.isAuto && !!options.preserveAcceptedTranslations });
       if (this.abortController) {
         this.abortController.abort();
         this.abortController = null;
@@ -150,6 +141,8 @@ export class PageTranslationManager extends ResourceTracker {
       messageId: null,
       sessionContext: null,
       url: window.location.href,
+      explicitProvider: options.provider,
+      settingsRevision: this.translationSettingsRevision,
       previousState: {
         isTranslated: this.isTranslated,
         isTranslating: this.isTranslating,
@@ -164,10 +157,8 @@ export class PageTranslationManager extends ResourceTracker {
     };
 
     try {
+      this.pendingSettingsAttempt = attempt;
       this._injectLayoutFix();
-
-      // Stop active Select Element mode before accepting this translation session.
-      await this.featureManager?.resolveFeatureConflict?.('pageTranslation');
 
       this.isTranslating = true;
       attempt.controller = new AbortController();
@@ -177,8 +168,14 @@ export class PageTranslationManager extends ResourceTracker {
       this.translationMessageId = attempt.messageId;
       this.sessionContext = attempt.sessionContext;
 
-      this.settings = await PageTranslationSettingsLoader.load(options);
+      // Reserve cancellation ownership before resolving the feature conflict.
+      await this.featureManager?.resolveFeatureConflict?.('pageTranslation');
       if (!this._isCurrentPreStartAttempt(attempt)) return this._settleStalePreStartAttempt(attempt);
+
+      const settings = await PageTranslationSettingsLoader.load(options);
+      if (!this._isCurrentPreStartAttempt(attempt)) return this._settleStalePreStartAttempt(attempt);
+      this.settings = settings;
+      if (this.pendingSettingsAttempt === attempt) this.pendingSettingsAttempt = null;
 
       // Token Usage Warning: AI and DeepL providers consume tokens/credits.
       // Whole Page Translation is very heavy, so we warn the user to avoid surprise costs.
@@ -284,7 +281,6 @@ export class PageTranslationManager extends ResourceTracker {
         attempt.sessionContext,
         {
           preserveAcceptedTranslations: !!options.isAuto && !!options.preserveAcceptedTranslations,
-          acceptedTranslationSnapshot,
           settingsRevision: this.translationSettingsRevision,
           onRetainedTranslation: () => {
             if (this._isCurrentPreStartAttempt(attempt)) {
@@ -348,6 +344,8 @@ export class PageTranslationManager extends ResourceTracker {
         errorDetails: MessageFormat.serializeTranslationError(error)
       }, hasAcceptedStart ? attempt.messageId : null);
       throw error;
+    } finally {
+      if (this.pendingSettingsAttempt === attempt) this.pendingSettingsAttempt = null;
     }
   }
 
@@ -360,6 +358,7 @@ export class PageTranslationManager extends ResourceTracker {
       && this.sessionContext === attempt.sessionContext
       && this.currentUrl === attempt.url
       && window.location.href === attempt.url
+      && this.translationSettingsRevision === attempt.settingsRevision
     );
   }
 
@@ -521,7 +520,7 @@ export class PageTranslationManager extends ResourceTracker {
     this._broadcastEvent(MessageActions.PAGE_TRANSLATE_RESET_ERROR, { isInternal: true });
   }
 
-  resetLocalState() {
+  resetLocalState({ preserveAcceptedTranslations = false } = {}) {
     this._removeLayoutFix();
     this.isTranslated = false;
     this.isTranslating = false;
@@ -529,7 +528,9 @@ export class PageTranslationManager extends ResourceTracker {
     this.isFatalErrorHandling = false; // Reset flag
     this.sessionContext = null;
     this.scheduler.reset();
-    this.bridge.cleanup();
+    // Keep one stopped restore owner until a replacement session is admitted.
+    if (preserveAcceptedTranslations) this.bridge.stopPersistence();
+    else this.bridge.cleanup();
   }
 
   /**

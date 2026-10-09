@@ -122,14 +122,6 @@ describe('PageTranslationBridge stale settlement integration', () => {
     return { pending, onTranslate };
   };
 
-  const captureAcceptedSnapshot = () => ({
-    nodeStorage: bridge.session.nodesTranslator.nodeStorage,
-    document: bridge.session.root.ownerDocument,
-    translationApi: bridge.session.translationApi,
-    targetLanguage: bridge.session.targetLanguage,
-    settingsRevision: bridge.session.settingsRevision,
-  });
-
   it('applies fresh text and leaves settlement accepted', async () => {
     const node = document.createTextNode('Original');
     document.body.appendChild(node);
@@ -487,15 +479,14 @@ describe('PageTranslationBridge stale settlement integration', () => {
     await vi.waitFor(() => expect(acceptedNode.nodeValue).toContain('Accepted translation'));
     const oldStorage = bridge.session.nodesTranslator.nodeStorage;
     const oldRecord = oldStorage.get(acceptedNode);
-    const acceptedTranslationSnapshot = captureAcceptedSnapshot();
-    bridge.cleanup();
+    bridge.stopPersistence();
     window.history.replaceState({}, '', '/retained-pending-route');
     const requests = [];
     const retained = vi.fn();
     await bridge.initialize({ ...settings, autoTranslateOnDOMChanges: true }, (text, context, score, node) => new Promise(resolve => {
       requests.push({ text, node, resolve });
     }), Symbol('new-session'), {
-      preserveAcceptedTranslations: true, acceptedTranslationSnapshot, onRetainedTranslation: retained,
+      preserveAcceptedTranslations: true, onRetainedTranslation: retained,
     });
     bridge.translate(document.body);
 
@@ -530,8 +521,7 @@ describe('PageTranslationBridge stale settlement integration', () => {
       const { pending } = await startDeferredTranslation();
       pending[0].resolve(settlement('Accepted shared translation'));
       await vi.waitFor(() => expect(oldNode.nodeValue).toContain('Accepted shared translation'));
-      const acceptedTranslationSnapshot = captureAcceptedSnapshot();
-      bridge.cleanup();
+      bridge.stopPersistence();
       window.history.replaceState({}, '', '/new-owned-root');
       if (scenario === 'disconnected') oldOwner.remove();
       const root = scenario === 'outside-root' ? document.getElementById('new') : document.body;
@@ -541,7 +531,7 @@ describe('PageTranslationBridge stale settlement integration', () => {
       const retained = vi.fn();
       const translate = vi.fn(async () => settlement('New route translation'));
       await bridge.initialize(settings, translate, Symbol('new'), {
-        preserveAcceptedTranslations: true, acceptedTranslationSnapshot, onRetainedTranslation: retained,
+        preserveAcceptedTranslations: true, onRetainedTranslation: retained,
       });
       bridge.translate(root);
 
@@ -562,13 +552,12 @@ describe('PageTranslationBridge stale settlement integration', () => {
     const { pending } = await startDeferredTranslation(options);
     pending[0].resolve(settlement('Translated source'));
     await vi.waitFor(() => expect(owner.style.fontFamily).toBe('sans-serif'));
-    const acceptedTranslationSnapshot = captureAcceptedSnapshot();
-    bridge.cleanup();
+    bridge.stopPersistence();
     window.history.replaceState({}, '', '/retained-font-route');
     hoverPreviewLookup.add.mockClear();
     const translate = vi.fn();
     await bridge.initialize({ ...settings, ...options }, translate, Symbol('next'), {
-      preserveAcceptedTranslations: true, acceptedTranslationSnapshot,
+      preserveAcceptedTranslations: true,
     });
     bridge.translate(document.body);
 
@@ -580,7 +569,7 @@ describe('PageTranslationBridge stale settlement integration', () => {
     expect(owner.style.fontFamily).toBe('serif');
   });
 
-  it.each(['text', 'title', 'shadow'])('retains and restores accepted %s nodes across SPA routes after cleanup', async (kind) => {
+  it.each(['text', 'title', 'shadow'])('retains and restores accepted %s nodes across SPA routes after stopping', async (kind) => {
     const owner = document.createElement('div');
     document.body.appendChild(owner);
     let node;
@@ -600,15 +589,14 @@ describe('PageTranslationBridge stale settlement integration', () => {
     const { pending } = await startDeferredTranslation();
     pending.find(item => item.node === node).resolve(settlement('Accepted translation'));
     await vi.waitFor(() => expect(node.nodeValue).toContain('Accepted translation'));
-    const acceptedTranslationSnapshot = captureAcceptedSnapshot();
-    const oldStorage = acceptedTranslationSnapshot.nodeStorage;
+    const oldStorage = bridge.session.nodesTranslator.nodeStorage;
     const oldRecord = oldStorage.get(node);
-    bridge.cleanup();
+    bridge.stopPersistence();
     window.history.replaceState({}, '', '/retained-node-route');
     const translate = vi.fn();
     const retained = vi.fn();
     await bridge.initialize(settings, translate, Symbol('next'), {
-      preserveAcceptedTranslations: true, acceptedTranslationSnapshot, onRetainedTranslation: retained,
+      preserveAcceptedTranslations: true, onRetainedTranslation: retained,
     });
     bridge.translate(document.body);
 
@@ -684,11 +672,10 @@ describe('PageTranslationBridge stale settlement integration', () => {
 
         const retained = vi.fn();
         const resume = async () => {
-          const acceptedTranslationSnapshot = captureAcceptedSnapshot();
-          bridge.cleanup();
+          bridge.stopPersistence();
           window.history.replaceState({}, '', `/retained-lazy-route-${observers.length}`);
           await bridge.initialize(lazySettings, translate, Symbol('resumed'), {
-            preserveAcceptedTranslations: true, acceptedTranslationSnapshot, onRetainedTranslation: retained,
+            preserveAcceptedTranslations: true, onRetainedTranslation: retained,
           });
           bridge.translate(document.body);
         };
@@ -787,9 +774,8 @@ describe('PageTranslationBridge stale settlement integration', () => {
         bridge.session.nodesTranslator.update(node);
         await vi.waitFor(() => expect(pending).toHaveLength(2));
       }
-      const acceptedTranslationSnapshot = captureAcceptedSnapshot();
-      if (scenario === 'document') acceptedTranslationSnapshot.document = document.implementation.createHTMLDocument('Other document');
-      bridge.cleanup();
+      if (scenario === 'document') bridge.session.root = document.implementation.createHTMLDocument('Other document').body;
+      bridge.stopPersistence();
       window.history.replaceState({}, '', '/retention-mismatch-route');
       const retained = vi.fn();
       const translate = vi.fn(async () => settlement('New translation'));
@@ -798,7 +784,6 @@ describe('PageTranslationBridge stale settlement integration', () => {
         targetLanguage: scenario === 'target' ? 'ja' : settings.targetLanguage,
       }, translate, Symbol('new-session'), {
         preserveAcceptedTranslations: scenario !== 'manual',
-        acceptedTranslationSnapshot,
         settingsRevision: scenario === 'settings-revision' ? 1 : 0,
         onRetainedTranslation: retained,
       });

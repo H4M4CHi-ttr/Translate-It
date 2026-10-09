@@ -84,13 +84,15 @@ describe('PageTranslationEventManager', () => {
   });
 
   describe('Trusted SPA navigation', () => {
-    it('delegates even a same-URL notification to the navigation owner', () => {
+    it('delegates trusted URL evidence to the navigation owner without forcing a restart', () => {
       mockManager.currentUrl = window.location.href;
       mockManager.isTranslating = true;
       const callback = mockManager.addEventListener.mock.calls[0][2];
 
-      expect(callback({ action: MessageActions.SPA_NAVIGATION }, { id: browser.runtime.id })).toBeUndefined();
-      expect(mockManager.featureManager.checkForUrlChange).toHaveBeenCalledExactlyOnceWith({ force: true });
+      expect(callback({ action: MessageActions.SPA_NAVIGATION, data: { url: window.location.href, timeStamp: 100 } }, { id: browser.runtime.id })).toBeUndefined();
+      expect(mockManager.featureManager.checkForUrlChange).toHaveBeenCalledExactlyOnceWith({
+        navigationUrl: window.location.href, navigationTimeStamp: 100,
+      });
       expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
       expect(mockManager.currentUrl).toBe(window.location.href);
     });
@@ -153,6 +155,35 @@ describe('PageTranslationEventManager', () => {
       const callback = storageManager.on.mock.calls.find(c => c[0] === 'change:TRANSLATION_API')[1];
       callback({ newValue: 'gemini', oldValue: 'google' });
       expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
+    });
+
+    it('keeps an explicit request when the Page default changes', () => {
+      mockManager.settings = { translationApi: 'custom', isExplicitProvider: true, usesGlobalProvider: false };
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change:MODE_PROVIDERS')[1];
+      callback({ oldValue: {}, newValue: { [TranslationMode.Page]: 'gemini' } });
+      expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
+    });
+
+    it.each(['TRANSLATION_API', 'MODE_PROVIDERS'])(
+      'invalidates unresolved provider dependency rather than the old override for %s', key => {
+        mockManager.settings = { translationApi: 'custom', usesGlobalProvider: false };
+        mockManager.pendingSettingsAttempt = { explicitProvider: undefined };
+        const callback = storageManager.on.mock.calls.find(c => c[0] === `change:${key}`)[1];
+        callback(key === 'TRANSLATION_API'
+          ? { oldValue: 'google', newValue: 'gemini' }
+          : { oldValue: {}, newValue: { [TranslationMode.Page]: 'google' } });
+        expect(mockManager.stopAutoTranslation).toHaveBeenCalledOnce();
+      }
+    );
+
+    it('watches the pending explicit provider configuration instead of old accepted settings', () => {
+      mockManager.settings.translationApi = 'google';
+      mockManager.pendingSettingsAttempt = { explicitProvider: 'custom' };
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change')[1];
+      callback({ key: 'GOOGLE_API_MODEL', oldValue: 'one', newValue: 'two' });
+      expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
+      callback({ key: 'CUSTOM_API_MODEL', oldValue: 'one', newValue: 'two' });
+      expect(mockManager.stopAutoTranslation).toHaveBeenCalledOnce();
     });
 
     it('does not stop a newly loaded global session that already uses the changed provider', () => {

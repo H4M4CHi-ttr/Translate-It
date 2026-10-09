@@ -40,10 +40,12 @@ describe('Vue infrastructure frame contract', () => {
     );
     expect(registration).toBeDefined();
 
-    await registration[1]();
+    await registration[1]({ data: { url: 'https://example.com/new-route', timeStamp: 123 } });
 
     expect(featureManagerMock.initialize).toHaveBeenCalledOnce();
-    expect(featureManagerMock.checkForUrlChange).toHaveBeenCalledOnce();
+    expect(featureManagerMock.checkForUrlChange).toHaveBeenCalledExactlyOnceWith({
+      navigationUrl: 'https://example.com/new-route', navigationTimeStamp: 123,
+    });
   });
 
   it('iframe content core does not expose Vue loading', () => {
@@ -64,10 +66,12 @@ describe('Vue infrastructure frame contract', () => {
     );
     expect(registration).toBeDefined();
 
-    await registration[1]();
+    await registration[1]({ data: { url: 'https://frame.example.com/#two', timeStamp: 456 } });
 
     expect(featureManagerMock.initialize).toHaveBeenCalledOnce();
-    expect(featureManagerMock.checkForUrlChange).toHaveBeenCalledOnce();
+    expect(featureManagerMock.checkForUrlChange).toHaveBeenCalledExactlyOnceWith({
+      navigationUrl: 'https://frame.example.com/#two', navigationTimeStamp: 456,
+    });
   });
 
   it('iframe loadFeature("vue") resolves null without mounting Vue', async () => {

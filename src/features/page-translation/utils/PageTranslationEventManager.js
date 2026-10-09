@@ -45,8 +45,10 @@ export class PageTranslationEventManager {
           || !browser.runtime.id
           || sender?.id !== browser.runtime.id
           || sender?.tab) return;
-      // A history round trip can end on the same URL before its notification arrives.
-      void this.manager.featureManager?.checkForUrlChange({ force: true });
+      void this.manager.featureManager?.checkForUrlChange({
+        navigationUrl: message.data?.url,
+        navigationTimeStamp: message.data?.timeStamp,
+      });
     };
     this.manager.addEventListener(browser.runtime.onMessage, 'message', this.navigationListener);
   }
@@ -60,10 +62,13 @@ export class PageTranslationEventManager {
   _setupStorageListeners() {
     // Stop obsolete work without reverting translations already committed.
     storageManager.on('change:TRANSLATION_API', ({ newValue, oldValue }) => {
+      const pending = this.manager.pendingSettingsAttempt;
       if (newValue !== oldValue
-          && this.manager.settings?.usesGlobalProvider !== false
-          && !this.manager.settings?.isExplicitProvider
-          && newValue !== this.manager.settings?.translationApi) {
+          && (pending ? !pending.explicitProvider : (
+            this.manager.settings?.usesGlobalProvider !== false
+            && !this.manager.settings?.isExplicitProvider
+            && newValue !== this.manager.settings?.translationApi
+          ))) {
         this._invalidateTranslation();
       }
     });
@@ -72,14 +77,16 @@ export class PageTranslationEventManager {
       const newPageProvider = newValue?.[TranslationMode.Page];
       const oldPageProvider = oldValue?.[TranslationMode.Page];
 
-      if (newPageProvider !== oldPageProvider) {
+      const isExplicitProvider = this.manager.pendingSettingsAttempt
+        ? !!this.manager.pendingSettingsAttempt.explicitProvider : this.manager.settings?.isExplicitProvider;
+      if (newPageProvider !== oldPageProvider && !isExplicitProvider) {
         this._invalidateTranslation();
       }
     });
 
     storageManager.on('change', ({ key, newValue, oldValue }) => {
       if (newValue === oldValue) return;
-      const providerId = this.manager.settings?.translationApi;
+      const providerId = this.manager.pendingSettingsAttempt?.explicitProvider || this.manager.settings?.translationApi;
       const provider = findProviderById(providerId);
       let affectsTranslation = TRANSLATION_SETTING_KEYS.has(key);
 

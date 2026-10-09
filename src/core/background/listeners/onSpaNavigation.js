@@ -21,6 +21,10 @@ export async function handleSpaNavigation(details) {
   try {
     await browser.tabs.sendMessage(tabId, {
       action: MessageActions.SPA_NAVIGATION,
+      data: {
+        url: typeof details.url === 'string' ? details.url : null,
+        timeStamp: Number.isFinite(details.timeStamp) ? details.timeStamp : null,
+      },
     }, {
       frameId,
     });
