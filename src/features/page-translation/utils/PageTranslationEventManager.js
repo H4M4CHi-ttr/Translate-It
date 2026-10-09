@@ -1,3 +1,4 @@
+import browser from 'webextension-polyfill';
 import { MessageActions } from '@/shared/messaging/core/MessageActions.js';
 import { storageManager } from '@/shared/storage/core/StorageCore.js';
 import { TranslationMode } from '@/config.js';
@@ -6,6 +7,15 @@ import { ErrorHandler } from '@/shared/error-management/ErrorHandler.js';
 import { ErrorTypes } from '@/shared/error-management/ErrorTypes.js';
 import { isStructuredTranslationError } from '@/shared/messaging/core/MessagingCore.js';
 import { getPageTranslationErrorPresentation } from './PageTranslationErrorPresenter.js';
+import { findProviderById } from '@/features/translation/providers/ProviderManifest.js';
+import { ApiKeyManager } from '@/features/translation/providers/ApiKeyManager.js';
+
+const TRANSLATION_SETTING_KEYS = new Set([
+  'SOURCE_LANGUAGE', 'TARGET_LANGUAGE', 'OPTIMIZATION_LEVEL', 'BILINGUAL_TRANSLATION',
+  'AI_CONTEXT_TRANSLATION_ENABLED', 'SMART_CONTEXT_TRANSLATION_ENABLED',
+  'PROMPT_TEMPLATE', 'PROMPT_TEMPLATE_AUTO', 'PROMPT_BASE_BATCH',
+  'PROMPT_BASE_AI_BATCH', 'PROMPT_BASE_AI_BATCH_AUTO',
+]);
 
 /**
  * PageTranslationEventManager - Specialized class to handle external events
@@ -23,16 +33,35 @@ export class PageTranslationEventManager {
   }
 
   _init() {
+    this.initialize();
     this._setupStorageListeners();
     this._setupPageEventBusListeners();
   }
 
+  initialize() {
+    if (this.navigationListener) return;
+    this.navigationListener = (message, sender) => {
+      if (message?.action !== MessageActions.SPA_NAVIGATION
+          || !browser.runtime.id
+          || sender?.id !== browser.runtime.id
+          || sender?.tab) return;
+      // A history round trip can end on the same URL before its notification arrives.
+      this._invalidateTranslation();
+    };
+    this.manager.addEventListener(browser.runtime.onMessage, 'message', this.navigationListener);
+  }
+
+  destroy() {
+    if (!this.navigationListener) return;
+    this.manager.removeEventListener(browser.runtime.onMessage, 'message', this.navigationListener);
+    this.navigationListener = null;
+  }
+
   _setupStorageListeners() {
-    // Listen for provider changes to reset any existing fatal error states
+    // Stop obsolete work without reverting translations already committed.
     storageManager.on('change:TRANSLATION_API', ({ newValue, oldValue }) => {
       if (newValue !== oldValue) {
-        this.logger.info('Global TRANSLATION_API changed, resetting error state');
-        this.manager.resetError();
+        this._invalidateTranslation();
       }
     });
 
@@ -41,9 +70,33 @@ export class PageTranslationEventManager {
       const oldPageProvider = oldValue?.[TranslationMode.Page];
 
       if (newPageProvider !== oldPageProvider) {
-        this.logger.info('Mode-specific provider for PAGE changed, resetting error state');
-        this.manager.resetError();
+        this._invalidateTranslation();
       }
+    });
+
+    storageManager.on('change', ({ key, newValue, oldValue }) => {
+      if (newValue === oldValue) return;
+      const providerId = this.manager.settings?.translationApi;
+      const provider = findProviderById(providerId);
+      let affectsTranslation = TRANSLATION_SETTING_KEYS.has(key);
+
+      if (key === 'PROVIDER_OPTIMIZATION_LEVELS') {
+        affectsTranslation = newValue?.[providerId] !== oldValue?.[providerId]
+          || (provider?.name && newValue?.[provider.name] !== oldValue?.[provider.name]);
+      } else if (key === 'BILINGUAL_TRANSLATION_MODES') {
+        affectsTranslation = newValue?.[TranslationMode.Page] !== oldValue?.[TranslationMode.Page];
+      } else if (providerId && key.startsWith(`${providerId.toUpperCase()}_`)) {
+        affectsTranslation = /_(API_KEY|API_URL|API_MODEL|MODEL|THINKING_MODE|API_TIER|FORMALITY|BETA_LANGUAGES_ENABLED)$/.test(key);
+        if (affectsTranslation && key.endsWith('_API_KEY')) {
+          const previousKeys = ApiKeyManager.parseKeys(oldValue).sort();
+          const nextKeys = ApiKeyManager.parseKeys(newValue).sort();
+          // Successful failover promotes an existing key without changing credentials.
+          affectsTranslation = previousKeys.length !== nextKeys.length
+            || previousKeys.some((value, index) => value !== nextKeys[index]);
+        }
+      }
+
+      if (affectsTranslation) this._invalidateTranslation();
     });
 
     // Listen for scroll stop delay changes
@@ -72,6 +125,13 @@ export class PageTranslationEventManager {
         }
       }
     });
+  }
+
+  _invalidateTranslation() {
+    void this.manager.stopAutoTranslation({ cancellationReason: 'operation-abort' }).catch(() => {
+      this.logger.warn('Stopping obsolete page translation failed');
+    });
+    this.manager.resetError();
   }
 
   _setupPageEventBusListeners() {

@@ -86,6 +86,7 @@ export class PageTranslationManager extends ResourceTracker {
   async activate() {
     if (this.isActive) return true;
     try {
+      this.eventManager.initialize();
       await this.toastIntegration.initialize();
       this.settings = await PageTranslationSettingsLoader.load();
       this.scheduler.setSettings(this.settings);
@@ -247,6 +248,7 @@ export class PageTranslationManager extends ResourceTracker {
         }
       }
 
+      if (!this._isCurrentPreStartAttempt(attempt)) return this._settleStalePreStartAttempt(attempt);
       this.scheduler.setTranslationState(true, this.translationMessageId, this.sessionContext);
 
       // Initialize bridge with fresh context and standard callback
@@ -271,6 +273,7 @@ export class PageTranslationManager extends ResourceTracker {
         },
         attempt.sessionContext
       );
+      if (!this._isCurrentPreStartAttempt(attempt)) return this._settleStalePreStartAttempt(attempt);
       
       // CRITICAL: Translate only document.body to prevent scroll jumps and HEAD-tag interference.
       // Translating documentElement causes jumps to top on sites with complex scrollers (like Twitter).
@@ -515,8 +518,9 @@ export class PageTranslationManager extends ResourceTracker {
    * @param {string} [options.cancellationReason] - Remote cancellation reason
    */
   async stopAutoTranslation({ cancellationReason = ActionReasons.USER_STOPPED_PAGE_TRANSLATION } = {}) {
-    // Allow stopping if either we are in initial pass OR auto-translating changes
-    if (!this.isAutoTranslating && !this.isTranslating) {
+    // Lazy nodes can still own a live session after presentation becomes idle.
+    if (!this.isAutoTranslating && !this.isTranslating
+        && !this.scheduler.isTranslated && !this.bridge.session?.active) {
       return { success: false, reason: ActionReasons.NOT_AUTO_TRANSLATING };
     }
 
@@ -526,6 +530,9 @@ export class PageTranslationManager extends ResourceTracker {
 
       this.scrollTracker.stop();
       this.bridge.stopPersistence();
+      this.abortController?.abort();
+      this.abortController = null;
+      this.sessionContext = null;
       this.isAutoTranslating = false;
       this.isTranslating = false;
       this.isTranslated = this.scheduler.translatedCount > 0;
@@ -886,6 +893,7 @@ export class PageTranslationManager extends ResourceTracker {
   }
 
   async cleanup() {
+    this.eventManager.destroy();
     this.cancelTranslation({ cancellationReason: INTERNAL_CANCELLATION_REASON });
     if (this.isTranslated) await this.restorePage();
     this.isAutoTranslating = false;

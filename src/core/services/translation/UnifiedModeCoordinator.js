@@ -488,6 +488,8 @@ export class UnifiedModeCoordinator {
             instruction,
             rawJsonPayload: true,
             executionContext,
+            // Page batches have no conversation-history dependency; the shared AI limiter owns HTTP capacity.
+            ...(mode === TranslationMode.Page && providerInstance.constructor.isAI && { parallelExecution: true }),
             ...(languagePairResolved && { languagePairResolved: true }),
         }),
         timeoutPromise

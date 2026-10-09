@@ -172,6 +172,7 @@ export class PageTranslationBridge extends ResourceTracker {
       domTranslator: null,
       persistentTranslator: null,
       context: sessionContext,
+      url: window.location.href,
       root: null,
       active: true,
       shadowDiscoveryObserver: null,
@@ -207,6 +208,7 @@ export class PageTranslationBridge extends ResourceTracker {
 
     const isFreshTarget = (node, sourceValue, generation) => {
       if (!currentSession.active || this.session !== currentSession || !node) return false;
+      if (window.location.href !== currentSession.url) return false;
 
       const owner = node.nodeType === Node.ATTRIBUTE_NODE ? node.ownerElement : node;
       const root = currentSession.root;
@@ -251,6 +253,7 @@ export class PageTranslationBridge extends ResourceTracker {
 
     const isActiveTarget = (node) => {
       if (!currentSession.active || this.session !== currentSession || !node) return false;
+      if (window.location.href !== currentSession.url) return false;
       const owner = node.nodeType === Node.ATTRIBUTE_NODE ? node.ownerElement : node;
       const root = currentSession.root;
       return isOwnedTarget(owner, root);
@@ -427,7 +430,7 @@ export class PageTranslationBridge extends ResourceTracker {
 
           const canApply = decision
             && decision.session === currentSession
-            && currentSession.active
+            && isActiveTarget(node)
             && decision.generation === targetGenerations.get(node)
             && decision.outcome === 'accepted-pending'
             && (!decision.settlement || decision.settlement.state === 'pending');
@@ -505,6 +508,7 @@ export class PageTranslationBridge extends ResourceTracker {
      */
     const originalTranslate = nodesTranslator.translate;
     nodesTranslator.translate = function(node, callback) {
+      if (this.has(node)) return originalTranslate.call(this, node, callback);
       this.currentNode = node;
       this.currentTaskGeneration = nextTargetGeneration(node);
       this.currentTaskOwnsStorage = typeof this.has === 'function' ? !this.has(node) : true;
@@ -823,9 +827,8 @@ export class PageTranslationBridge extends ResourceTracker {
   }
 
   translate(element) {
-    if (!this.session) return;
+    if (!this.session?.active || window.location.href !== this.session.url) return;
     this.session.root = element;
-    this.session.active = true;
     
     // Respect auto-translate setting: 
     // Use persistentTranslator (MutationObserver) only if enabled.
@@ -845,9 +848,12 @@ export class PageTranslationBridge extends ResourceTracker {
   }
 
   stopPersistence() {
+    // Retain restore storage, but invalidate pending writers and lazy callbacks.
+    if (this.session) this.session.active = false;
     if (this.session && this.session.persistentTranslator) {
       try {
         this.session.stopShadowPersistence?.();
+        this.session.intersectionScheduler?.intersectionObserver?.intersectionObserver?.disconnect();
         const pt = this.session.persistentTranslator;
         // Search for the observer in observedNodesStorage (it's a Map of node -> XMutationObserver)
         if (pt.observedNodesStorage) {

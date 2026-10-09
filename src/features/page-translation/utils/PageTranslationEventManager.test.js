@@ -1,16 +1,21 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import browser from 'webextension-polyfill';
 import { PageTranslationEventManager } from './PageTranslationEventManager.js';
 import { MessageActions } from '@/shared/messaging/core/MessageActions.js';
 import { storageManager } from '@/shared/storage/core/StorageCore.js';
 import { ErrorHandler } from '@/shared/error-management/ErrorHandler.js';
 import { ErrorTypes } from '@/shared/error-management/ErrorTypes.js';
 import { pageEventBus } from '@/core/PageEventBus.js';
+import { TranslationMode } from '@/config.js';
+import { ApiKeyManager } from '@/features/translation/providers/ApiKeyManager.js';
 
 // Mock storageManager
 vi.mock('@/shared/storage/core/StorageCore.js', () => ({
   storageManager: {
     on: vi.fn(),
-    off: vi.fn()
+    off: vi.fn(),
+    get: vi.fn(),
+    set: vi.fn(),
   }
 }));
 
@@ -27,9 +32,13 @@ vi.mock('@/shared/error-management/ErrorHandler.js');
 describe('PageTranslationEventManager', () => {
   let mockManager;
   let mockBus;
+  let eventManager;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    storageManager.get.mockReset();
+    storageManager.set.mockReset();
+    browser.runtime.id = 'test-extension';
     
     // Reset global state
     delete window._translateItPageTranslationListenersSet;
@@ -47,6 +56,8 @@ describe('PageTranslationEventManager', () => {
         error: vi.fn(),
         warn: vi.fn()
       },
+      addEventListener: vi.fn((target, _event, handler) => target.addListener(handler)),
+      removeEventListener: vi.fn((target, _event, handler) => target.removeListener(handler)),
       settings: {
         scrollStopDelay: 500,
         translateAfterScrollStop: false
@@ -64,7 +75,44 @@ describe('PageTranslationEventManager', () => {
       _broadcastEvent: vi.fn()
     };
 
-    new PageTranslationEventManager(mockManager);
+    eventManager = new PageTranslationEventManager(mockManager);
+  });
+
+  afterEach(() => {
+    eventManager.destroy();
+  });
+
+  describe('Trusted SPA navigation', () => {
+    it('stops immediately even if an A-B-A navigation ends on the original URL', () => {
+      mockManager.currentUrl = window.location.href;
+      mockManager.isTranslating = true;
+      const callback = mockManager.addEventListener.mock.calls[0][2];
+
+      expect(callback({ action: MessageActions.SPA_NAVIGATION }, { id: browser.runtime.id })).toBeUndefined();
+      expect(mockManager.stopAutoTranslation).toHaveBeenCalledWith({ cancellationReason: 'operation-abort' });
+      expect(mockManager.currentUrl).toBe(window.location.href);
+    });
+
+    it.each([
+      undefined,
+      { id: 'another-extension' },
+      { id: 'test-extension', tab: { id: 1 } },
+    ])('ignores an untrusted navigation sender %o', (sender) => {
+      mockManager.addEventListener.mock.calls[0][2]({ action: MessageActions.SPA_NAVIGATION }, sender);
+      expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
+    });
+
+    it('registers once, removes the tracked listener and registers again after reactivation', () => {
+      const listener = eventManager.navigationListener;
+      eventManager.initialize();
+      expect(mockManager.addEventListener).toHaveBeenCalledOnce();
+      eventManager.destroy();
+      eventManager.destroy();
+      expect(mockManager.removeEventListener).toHaveBeenCalledExactlyOnceWith(browser.runtime.onMessage, 'message', listener);
+      eventManager.initialize();
+      expect(mockManager.addEventListener).toHaveBeenCalledTimes(2);
+      expect(eventManager.navigationListener).not.toBe(listener);
+    });
   });
 
   describe('Storage Listeners', () => {
@@ -78,6 +126,96 @@ describe('PageTranslationEventManager', () => {
       const callback = storageManager.on.mock.calls.find(c => c[0] === 'change:TRANSLATION_API')[1];
       callback({ newValue: 'gemini', oldValue: 'google' });
       expect(mockManager.resetError).toHaveBeenCalled();
+      expect(mockManager.stopAutoTranslation).toHaveBeenCalledWith({ cancellationReason: 'operation-abort' });
+    });
+
+    it('stops immediately for a page provider change but ignores other modes and unchanged providers', () => {
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change:MODE_PROVIDERS')[1];
+      callback({ newValue: { [TranslationMode.Page]: 'custom' }, oldValue: { [TranslationMode.Page]: 'custom' } });
+      expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
+
+      callback({ newValue: { [TranslationMode.Page]: 'openai' }, oldValue: { [TranslationMode.Page]: 'custom' } });
+      expect(mockManager.stopAutoTranslation).toHaveBeenCalledOnce();
+      expect(mockManager.resetError).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      'SOURCE_LANGUAGE', 'TARGET_LANGUAGE', 'OPTIMIZATION_LEVEL', 'AI_CONTEXT_TRANSLATION_ENABLED',
+      'BILINGUAL_TRANSLATION',
+      'PROMPT_TEMPLATE', 'PROMPT_TEMPLATE_AUTO', 'PROMPT_BASE_AI_BATCH',
+      'CUSTOM_API_MODEL', 'CUSTOM_API_URL', 'CUSTOM_API_KEY',
+    ])('immediately stops obsolete output for changed %s without logging values', (key) => {
+      mockManager.settings.translationApi = 'custom';
+      mockManager.isTranslating = true;
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change')[1];
+      callback({ key, oldValue: 'previous-value', newValue: 'replacement-value' });
+
+      expect(mockManager.stopAutoTranslation).toHaveBeenCalledWith({ cancellationReason: 'operation-abort' });
+      expect(mockManager.resetError).toHaveBeenCalledOnce();
+      expect(JSON.stringify(mockManager.logger.info.mock.calls)).not.toContain('replacement-value');
+      expect(JSON.stringify(mockManager.logger.debug.mock.calls)).not.toContain('replacement-value');
+    });
+
+    it('ignores unchanged settings, unrelated provider settings, model lists and other provider optimization', () => {
+      mockManager.settings.translationApi = 'custom';
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change')[1];
+      callback({ key: 'TARGET_LANGUAGE', oldValue: 'ja', newValue: 'ja' });
+      callback({ key: 'OPENAI_API_MODEL', oldValue: 'one', newValue: 'two' });
+      callback({ key: 'CUSTOM_MODELS', oldValue: [], newValue: ['new-model'] });
+      callback({ key: 'PROVIDER_OPTIMIZATION_LEVELS', oldValue: { custom: 3 }, newValue: { custom: 3, openai: 5 } });
+
+      expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
+      expect(mockManager.resetError).not.toHaveBeenCalled();
+    });
+
+    it.each(['custom', 'Custom'])('stops for optimization override stored under %s', (providerKey) => {
+      mockManager.settings.translationApi = 'custom';
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change')[1];
+      callback({ key: 'PROVIDER_OPTIMIZATION_LEVELS', oldValue: { [providerKey]: 3 }, newValue: { [providerKey]: 5 } });
+
+      expect(mockManager.stopAutoTranslation).toHaveBeenCalledOnce();
+    });
+
+    it('keeps page translation running when successful key failover promotes an existing key', async () => {
+      mockManager.settings.translationApi = 'custom';
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change')[1];
+      const oldValue = ' first-test-key \nsecond-test-key\n';
+      storageManager.get.mockResolvedValue({ CUSTOM_API_KEY: oldValue });
+      storageManager.set.mockImplementation(async (changes) => {
+        callback({ key: 'CUSTOM_API_KEY', oldValue, newValue: changes.CUSTOM_API_KEY });
+      });
+      await ApiKeyManager.promoteKey('CUSTOM_API_KEY', 'second-test-key');
+
+      expect(storageManager.set).toHaveBeenCalledWith({ CUSTOM_API_KEY: 'second-test-key\nfirst-test-key' });
+      expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
+      expect(mockManager.resetError).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['first-test-key', 'first-test-key\nsecond-test-key'],
+      ['first-test-key\nsecond-test-key', 'second-test-key'],
+      ['first-test-key', 'replacement-test-key'],
+    ])('stops when key membership changes', (oldValue, newValue) => {
+      mockManager.settings.translationApi = 'custom';
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change')[1];
+      callback({ key: 'CUSTOM_API_KEY', oldValue, newValue });
+      expect(mockManager.stopAutoTranslation).toHaveBeenCalledOnce();
+    });
+
+    it('ignores bilingual changes for other modes and stops when the page mode changes', () => {
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change')[1];
+      callback({
+        key: 'BILINGUAL_TRANSLATION_MODES',
+        oldValue: { [TranslationMode.Page]: false },
+        newValue: { [TranslationMode.Page]: false, [TranslationMode.Selection]: true },
+      });
+      expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
+      callback({
+        key: 'BILINGUAL_TRANSLATION_MODES',
+        oldValue: { [TranslationMode.Page]: false },
+        newValue: { [TranslationMode.Page]: true },
+      });
+      expect(mockManager.stopAutoTranslation).toHaveBeenCalledOnce();
     });
 
     it('should update scrollStopDelay when WHOLE_PAGE_SCROLL_STOP_DELAY changes', () => {

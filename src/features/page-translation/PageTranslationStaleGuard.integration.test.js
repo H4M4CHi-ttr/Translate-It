@@ -1,8 +1,14 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import browser from 'webextension-polyfill';
+
+vi.mock('@/shared/storage/core/StorageCore.js', () => ({
+  storageManager: { on: vi.fn(), off: vi.fn() },
+}));
 
 vi.mock('@/config.js', () => ({
   getTranslationApiAsync: vi.fn(async () => 'google'),
   getTargetLanguageAsync: vi.fn(async () => 'fa'),
+  TranslationMode: { Page: 'Page' },
 }));
 
 vi.mock('@/shared/logging/logger.js', () => ({
@@ -50,6 +56,8 @@ vi.mock('@/utils/dom/DomDirectionManager.js', () => ({
 }));
 
 import { PageTranslationBridge } from './PageTranslationBridge.js';
+import { PageTranslationEventManager } from './utils/PageTranslationEventManager.js';
+import { MessageActions } from '@/shared/messaging/core/MessageActions.js';
 import { applyNodeDirection } from '@/utils/dom/DomDirectionManager.js';
 import { hoverPreviewLookup } from '@/features/shared/hover-preview/HoverPreviewLookup.js';
 
@@ -87,8 +95,10 @@ const settings = {
 
 describe('PageTranslationBridge stale settlement integration', () => {
   let bridge;
+  let originalUrl;
 
   beforeEach(() => {
+    originalUrl = window.location.href;
     document.body.innerHTML = '';
     document.body.removeAttribute('data-page-translated');
     document.body.removeAttribute('data-has-original');
@@ -97,6 +107,7 @@ describe('PageTranslationBridge stale settlement integration', () => {
 
   afterEach(() => {
     bridge.cleanup();
+    window.history.replaceState(null, '', originalUrl);
   });
 
   const startDeferredTranslation = async (options = {}) => {
@@ -121,6 +132,53 @@ describe('PageTranslationBridge stale settlement integration', () => {
     await vi.waitFor(() => expect(node.nodeValue).toContain('Translated'));
     expect(accepted).toHaveBeenCalledWith('accepted');
     expect(applyNodeDirection).toHaveBeenCalled();
+  });
+
+  it('settles same-node duplicate updates once and applies only the newest generation', async () => {
+    const node = document.createTextNode('Original');
+    document.body.appendChild(node);
+    const { pending, onTranslate } = await startDeferredTranslation();
+    bridge.session.nodesTranslator.update(node);
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    expect(onTranslate.mock.calls.every(call => call[3] === node)).toBe(true);
+    const obsoleteSettled = vi.fn();
+    const freshSettled = vi.fn();
+    const obsolete = settlement('Obsolete duplicate', obsoleteSettled);
+    const fresh = settlement('Newest translation', freshSettled);
+    const writes = [];
+    const observer = new MutationObserver(records => writes.push(...records));
+    observer.observe(node, { characterData: true });
+    try {
+      pending[1].resolve(fresh);
+      await vi.waitFor(() => expect(fresh.state).toBe('accepted'));
+      pending[0].resolve(obsolete);
+      await vi.waitFor(() => expect(obsolete.state).toBe('stale'));
+
+      expect(node.nodeValue).toContain('Newest translation');
+      expect(node.nodeValue).not.toContain('Obsolete duplicate');
+      expect(obsoleteSettled).toHaveBeenCalledExactlyOnceWith('stale');
+      expect(freshSettled).toHaveBeenCalledExactlyOnceWith('accepted');
+      expect(writes).toHaveLength(1);
+      expect(onTranslate).toHaveBeenCalledTimes(2);
+    } finally {
+      observer.disconnect();
+    }
+  });
+
+  it('does not invalidate pending output when the same node is translated twice', async () => {
+    const node = document.createTextNode('Original');
+    document.body.appendChild(node);
+    const { pending, onTranslate } = await startDeferredTranslation();
+    bridge.translate(document.body);
+    expect(onTranslate).toHaveBeenCalledOnce();
+    const accepted = vi.fn();
+    const result = settlement('Translated once', accepted);
+    pending[0].resolve(result);
+
+    await vi.waitFor(() => expect(result.state).toBe('accepted'));
+    expect(node.nodeValue).toContain('Translated once');
+    expect(accepted).toHaveBeenCalledExactlyOnceWith('accepted');
+    expect(pending).toHaveLength(1);
   });
 
   it.each([
@@ -333,6 +391,82 @@ describe('PageTranslationBridge stale settlement integration', () => {
 
     expect(node.nodeValue).toBe('Original');
     expect(cancelled).toHaveBeenCalledWith('cancelled');
+  });
+
+  it.each(['pushState', 'replaceState'])('rejects pending output after SPA %s navigation', async (method) => {
+    const node = document.createTextNode('Original');
+    document.body.appendChild(node);
+    const { pending } = await startDeferredTranslation();
+    const stale = vi.fn();
+
+    window.history[method](null, '', '/next-page');
+    pending[0].resolve(settlement('Old page translation', stale));
+
+    await vi.waitFor(() => expect(stale).toHaveBeenCalledWith('stale'));
+    expect(node.nodeValue).toBe('Original');
+    expect(bridge.session.nodesTranslator.has(node)).toBe(false);
+
+    const { pending: nextPage } = await startDeferredTranslation();
+    const accepted = vi.fn();
+    nextPage[0].resolve(settlement('New page translation', accepted));
+    await vi.waitFor(() => expect(accepted).toHaveBeenCalledWith('accepted'));
+    expect(node.nodeValue).toContain('New page translation');
+  });
+
+  it('rejects old output after a trusted same-URL SPA history round trip', async () => {
+    const node = document.createTextNode('Original');
+    document.body.appendChild(node);
+    const { pending } = await startDeferredTranslation();
+    browser.runtime.id = 'test-extension';
+    const manager = {
+      logger: bridge.logger,
+      addEventListener: vi.fn((target, _event, handler) => target.addListener(handler)),
+      removeEventListener: vi.fn((target, _event, handler) => target.removeListener(handler)),
+      stopAutoTranslation: vi.fn(async () => bridge.stopPersistence()),
+      resetError: vi.fn(),
+    };
+    const events = new PageTranslationEventManager(manager);
+    try {
+      window.history.pushState(null, '', '/other-page');
+      window.history.replaceState(null, '', originalUrl);
+      events.navigationListener({ action: MessageActions.SPA_NAVIGATION }, { id: browser.runtime.id });
+      const cancelled = vi.fn();
+      pending[0].resolve(settlement('Old page translation', cancelled));
+
+      await vi.waitFor(() => expect(cancelled).toHaveBeenCalledWith('cancelled'));
+      expect(node.nodeValue).toBe('Original');
+      expect(manager.stopAutoTranslation).toHaveBeenCalledOnce();
+    } finally {
+      events.destroy();
+    }
+  });
+
+  it('cancels stopped output while preserving completed nodes for restore', async () => {
+    const completedNode = document.createTextNode('Completed source');
+    const pendingElement = document.createElement('p');
+    const pendingNode = document.createTextNode('Pending source');
+    pendingElement.appendChild(pendingNode);
+    document.body.append(completedNode, pendingElement);
+    const { pending } = await startDeferredTranslation();
+    await vi.waitFor(() => expect(pending.length).toBe(2));
+    pending.find(item => item.node === completedNode).resolve(settlement('Completed translation'));
+    await vi.waitFor(() => expect(completedNode.nodeValue).toContain('Completed translation'));
+
+    bridge.stopPersistence();
+    const cancelled = vi.fn();
+    pending.find(item => item.node === pendingNode).resolve(settlement('Stopped translation', cancelled));
+    await vi.waitFor(() => expect(cancelled).toHaveBeenCalledWith('cancelled'));
+    expect(pendingNode.nodeValue).toBe('Pending source');
+    expect(completedNode.nodeValue).toContain('Completed translation');
+    bridge.translate(document.body);
+    expect(pending).toHaveLength(2);
+    expect(bridge.session.active).toBe(false);
+
+    bridge.restore(document.body);
+    expect(completedNode.nodeValue).toBe('Completed source');
+    const { pending: nextSession } = await startDeferredTranslation();
+    nextSession.forEach(item => item.resolve(settlement('Retranslated')));
+    await vi.waitFor(() => expect(pendingNode.nodeValue).toContain('Retranslated'));
   });
 
   it('rejects older persistent work after an ABA source change', async () => {

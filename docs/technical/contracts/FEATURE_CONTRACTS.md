@@ -184,6 +184,9 @@ Modes: `whole_page` / batch translation.
 
 - **Page mutation owned by the page-translation feature** (`PageTranslationManager` → `PageTranslationBridge`, which wraps the `domtranslator` library).
 - **Accepted nodes are applied independently** (each text/attribute node translated via `NodesTranslator`, driven by `DomTranslator`'s per-node walk).
+- **Independent AI page batches use bounded workers.** Page dispatch shares the provider's physical request limit; it does not multiply that limit. The first AUTO batch still resolves the session's language pair before sibling provider calls. Traditional and conversation-history-dependent paths retain their execution policy.
+- **Batch item identity is session-owned.** The scheduler sends stable item IDs; the background preserves those IDs after provider response normalization. The scheduler maps results by ID, rejects unknown/duplicate IDs, and settles missing items as failed without resending valid siblings.
+- **Obsolete work cannot commit.** Session, source, target generation and DOM ownership are checked before application. Relevant settings changes, stop/restore and trusted SPA navigation invalidate pending work while retaining already committed translations on stop.
 - **Failed nodes remain original.** An errored batch item is resolved but the node's original text is retained and the DOM is not marked translated.
 - **Explicit skipped results remain original.** An item with `isSkipped === true` resolves to its original text, increments `failedCount`, never increments `translatedCount`, and does not prevent other valid items in the same batch from being applied.
 - **Completed nodes remain translated after a later failure/timeout.** Already-settled resolved nodes are not rolled back; only the in-flight batch is affected.

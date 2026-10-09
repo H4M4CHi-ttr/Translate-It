@@ -116,6 +116,35 @@ describe('UnifiedModeCoordinator', () => {
   });
 
   describe('processPageTranslation', () => {
+    it.each([
+      ['custom', true], ['openai', true], ['deepl', false], ['google', false],
+    ])('opts independent Page batches into the parallel lane only for AI (%s)', async (provider, isAI) => {
+      const providerInstance = {
+        constructor: { isAI },
+        translate: vi.fn().mockResolvedValue({ translatedText: ['translated'], sourceLanguage: 'en', targetLanguage: 'ja' }),
+      };
+      mockEngine.getProvider.mockResolvedValue(providerInstance);
+      const result = await coordinator.processRequest({
+        mode: TranslationMode.Page,
+        messageId: `page-${provider}`,
+        data: { provider, sourceLanguage: 'en', targetLanguage: 'ja', text: JSON.stringify([{ id: 'original-unit', text: 'source' }]) },
+      }, { translationEngine: mockEngine });
+      const options = providerInstance.translate.mock.calls[0][3];
+      if (isAI) expect(options.parallelExecution).toBe(true);
+      else expect(options).not.toHaveProperty('parallelExecution');
+      expect(JSON.parse(result.translatedText)).toEqual([{ id: 'original-unit', text: 'translated' }]);
+    });
+
+    it('retains the ordinary lane for AI Subtitle batches', async () => {
+      const providerInstance = { constructor: { isAI: true }, translate: vi.fn().mockResolvedValue(['translated']) };
+      mockEngine.getProvider.mockResolvedValue(providerInstance);
+      await coordinator.processRequest({
+        mode: TranslationMode.Subtitle, messageId: 'subtitle',
+        data: { provider: 'custom', sourceLanguage: 'en', targetLanguage: 'ja', items: [{ id: 'cue', text: 'source' }] },
+      }, { translationEngine: mockEngine });
+      expect(providerInstance.translate.mock.calls[0][3]).not.toHaveProperty('parallelExecution');
+    });
+
     it('returns empty batches without provider or lifecycle work', async () => {
       const request = {
         mode: TranslationMode.Page,

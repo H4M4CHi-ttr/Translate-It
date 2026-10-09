@@ -161,12 +161,15 @@ vi.mock('@/shared/logging/logger.js', () => ({
 }));
 
 const mockStorageManagerSet = vi.hoisted(() => vi.fn());
+const mockStorageManagerOn = vi.hoisted(() => vi.fn());
 const mockLoggerWarn = vi.hoisted(() => vi.fn());
 
 vi.mock('@/shared/storage/core/StorageCore.js', () => ({
   storageManager: {
     set: mockStorageManagerSet,
     get: vi.fn(),
+    on: mockStorageManagerOn,
+    off: vi.fn(),
   }
 }));
 
@@ -221,6 +224,16 @@ describe('PageTranslationManager', () => {
       expect(success).toBe(true);
       expect(manager.isActive).toBe(true);
       expect(manager.settings).toBeDefined();
+      expect(manager.eventManager.initialize).toHaveBeenCalledOnce();
+    });
+
+    it('removes navigation listeners on deactivation and reinstalls them on activation', async () => {
+      await manager.activate();
+      await manager.deactivate();
+      expect(manager.eventManager.destroy).toHaveBeenCalledOnce();
+
+      await manager.activate();
+      expect(manager.eventManager.initialize).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -419,12 +432,22 @@ describe('PageTranslationManager', () => {
       manager.isTranslating = true;
       manager.translationMessageId = 'stop-session';
       manager.acceptedLifecycleSessionId = 'stop-session';
+      manager.abortController = new AbortController();
+      const controller = manager.abortController;
+      manager.sessionContext = Symbol('stop-context');
+      manager.scheduler.translatedCount = 2;
       
       const result = await manager.stopAutoTranslation();
       
       expect(result.success).toBe(true);
       expect(manager.isAutoTranslating).toBe(false);
       expect(manager.bridge.stopPersistence).toHaveBeenCalled();
+      expect(manager.bridge.restore).not.toHaveBeenCalled();
+      expect(manager.bridge.cleanup).not.toHaveBeenCalled();
+      expect(manager.isTranslated).toBe(true);
+      expect(controller.signal.aborted).toBe(true);
+      expect(manager.abortController).toBeNull();
+      expect(manager.sessionContext).toBeNull();
       expect(manager.scheduler.setTranslationState).toHaveBeenCalledWith(
         false,
         undefined,
@@ -448,6 +471,83 @@ describe('PageTranslationManager', () => {
         MessageActions.PAGE_RESTORE_COMPLETE,
         expect.objectContaining({ sessionId: 'stop-session' })
       );
+    });
+
+    it.each(['TARGET_LANGUAGE', 'CUSTOM_API_MODEL'])(
+      'invalidates a non-auto lazy idle session on %s change, preserving completed nodes', async (key) => {
+        const { PageTranslationBridge: RealBridge } = await vi.importActual('./PageTranslationBridge.js');
+        const { PageTranslationEventManager: RealEvents } = await vi.importActual('./utils/PageTranslationEventManager.js');
+        const previousIntersectionObserver = globalThis.IntersectionObserver;
+        let observer;
+        globalThis.IntersectionObserver = class {
+          constructor(callback) {
+            this.callback = callback;
+            this.observe = vi.fn();
+            this.unobserve = vi.fn();
+            this.disconnect = vi.fn();
+            observer = this;
+          }
+        };
+        try {
+          manager.bridge = new RealBridge();
+          manager.settings = {
+            translationApi: 'custom', targetLanguage: 'ja', lazyLoading: true,
+            showOriginalOnHover: false, autoTranslateOnDOMChanges: false,
+          };
+          manager.eventManager = new RealEvents(manager);
+          document.body.innerHTML = '<p id="completed">Completed source</p><p id="pending">Pending source</p><p id="lazy">Lazy source</p>';
+          const pending = [];
+          await manager.bridge.initialize(manager.settings, (text) => new Promise(resolve => pending.push({ text, resolve })));
+          manager.bridge.translate(document.body);
+          const completedElement = document.getElementById('completed');
+          const pendingElement = document.getElementById('pending');
+          observer.callback([
+            { target: completedElement, isIntersecting: true },
+            { target: pendingElement, isIntersecting: true },
+          ], observer);
+          await vi.waitFor(() => expect(pending).toHaveLength(2));
+          const createSettlement = (text) => ({
+            __pageTranslationSettlement: true, text, state: 'pending',
+            settle(outcome) { this.state = outcome; },
+          });
+          pending.find(item => item.text === 'Completed source').resolve(createSettlement('Completed translation'));
+          await vi.waitFor(() => expect(completedElement.textContent).toContain('Completed translation'));
+
+          manager.scheduler.isTranslated = true;
+          manager.scheduler.translatedCount = 1;
+          manager.isTranslating = false;
+          manager.isAutoTranslating = false;
+          const callback = mockStorageManagerOn.mock.calls.find(call => call[0] === 'change')[1];
+          callback({ key, oldValue: 'old-test-value', newValue: 'new-test-value' });
+
+          expect(manager.bridge.session.active).toBe(false);
+          expect(observer.disconnect).toHaveBeenCalledOnce();
+          expect(manager.scheduler.setTranslationState).toHaveBeenCalledWith(false, undefined, undefined, 'operation-abort');
+          pending.find(item => item.text === 'Pending source').resolve(createSettlement('Obsolete translation'));
+          await Promise.resolve();
+          await Promise.resolve();
+          expect(pendingElement.textContent).toBe('Pending source');
+          expect(completedElement.textContent).toContain('Completed translation');
+          expect(document.getElementById('lazy').textContent).toBe('Lazy source');
+          manager.bridge.translate(document.body);
+          expect(pending).toHaveLength(2);
+          expect(manager.isTranslated).toBe(true);
+        } finally {
+          if (previousIntersectionObserver) globalThis.IntersectionObserver = previousIntersectionObserver;
+          else delete globalThis.IntersectionObserver;
+        }
+      }
+    );
+
+    it.each(['scheduler', 'bridge'])('stops idle translation owned only by %s', async (owner) => {
+      manager.isTranslating = false;
+      manager.isAutoTranslating = false;
+      manager.scheduler.isTranslated = owner === 'scheduler';
+      manager.bridge.session = { active: owner === 'bridge' };
+
+      expect((await manager.stopAutoTranslation({ cancellationReason: 'operation-abort' })).success).toBe(true);
+      expect(manager.bridge.stopPersistence).toHaveBeenCalledOnce();
+      expect(manager.scheduler.setTranslationState).toHaveBeenCalledWith(false, undefined, undefined, 'operation-abort');
     });
 
     it('updates completion state through trusted scheduler callback', () => {
@@ -1073,6 +1173,44 @@ describe('PageTranslationManager', () => {
         MessageActions.PAGE_RESTORE_COMPLETE,
         expect.any(Object)
       ));
+    });
+
+    it('does not admit pending settings after stopping obsolete translation', async () => {
+      await manager.activate();
+      manager.currentUrl = window.location.href;
+      const pendingSettings = createDeferred();
+      PageTranslationSettingsLoader.load.mockImplementationOnce(() => pendingSettings.promise);
+      const pending = manager.translatePage();
+      await vi.waitFor(() => expect(manager.abortController).not.toBeNull());
+      const controller = manager.abortController;
+
+      await manager.stopAutoTranslation({ cancellationReason: 'operation-abort' });
+      expect(controller.signal.aborted).toBe(true);
+      expect(manager.sessionContext).toBeNull();
+      expect(manager.bridge.stopPersistence).toHaveBeenCalled();
+      expect(manager.scheduler.setTranslationState).toHaveBeenCalledWith(false, undefined, undefined, 'operation-abort');
+      pendingSettings.resolve({ translationApi: 'custom', targetLanguage: 'ja' });
+
+      expect(await pending).toEqual({ success: false, reason: 'silent_error' });
+      expect(manager.bridge.initialize).not.toHaveBeenCalled();
+      expect(pageEventBus.emit).not.toHaveBeenCalledWith(MessageActions.PAGE_TRANSLATE_START, expect.anything());
+    });
+
+    it('does not restart translation after stopped bridge initialization completes', async () => {
+      await manager.activate();
+      manager.currentUrl = window.location.href;
+      const pendingBridge = createDeferred();
+      manager.bridge.initialize.mockImplementationOnce(() => pendingBridge.promise);
+      const pending = manager.translatePage();
+      await vi.waitFor(() => expect(manager.bridge.initialize).toHaveBeenCalled());
+
+      await manager.stopAutoTranslation({ cancellationReason: 'operation-abort' });
+      pendingBridge.resolve();
+
+      expect(await pending).toEqual({ success: false, reason: 'silent_error' });
+      expect(manager.bridge.translate).not.toHaveBeenCalled();
+      expect(manager.isTranslating).toBe(false);
+      expect(manager.isAutoTranslating).toBe(false);
     });
 
     it('does not admit a token confirmation after cancellation', async () => {

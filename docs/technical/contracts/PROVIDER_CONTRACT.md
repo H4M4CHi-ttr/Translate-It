@@ -31,7 +31,7 @@ explicit typed failure
 | --- | --- |
 | `ProviderCoordinator` | Selected-provider execution orchestration (language swap, JSON detection, strategy choice, clean-up). |
 | `QueueManager` | Retry scheduling (attempts, backoff, cancellation). |
-| `RateLimitManager` | Provider health / circuit breaker. |
+| `RateLimitManager` | Shared provider request capacity, AI 429 cooldown, provider health / circuit breaker. |
 | `ProviderRequestEngine` | Physical API call, API-key failover, physical request stats. |
 | `BaseAIProvider` | Structured-response recovery and conversation-candidate lifecycle. |
 | Feature consumers | Source preservation and UI mutation. |
@@ -150,7 +150,7 @@ TEXT_TOO_LONG
 
 ## 8. Provider Health Contract
 
-`RateLimitManager` per-provider state drives health: `consecutiveFailures`, `isCircuitOpen`, `circuitOpenTime`, `currentBackoffMultiplier`, `performanceStats`.
+`RateLimitManager` per-provider state drives health: `consecutiveFailures`, `isCircuitOpen`, `circuitOpenTime`, `currentBackoffMultiplier`, `performanceStats`. Its `activeRequests` capacity is shared across AI page batches and structured recovery. A physical AI 429 extends the shared `retryAt` deadline, including when API-key failover consumes that error; queued siblings and subsequent calls inside an existing slot wait for the deadline. Successful siblings do not clear it. Queue clearing and configuration reload retain live request accounting until the task settles.
 
 - **Network/provider failures affect health.** `_recordFailure` increments failure counters and may open the circuit.
 - **Cancellation does not.** Excluded from `_recordFailure`.
@@ -330,6 +330,7 @@ Numeric response IDs are valid only in a proven positional-wire context; they ar
 | --- | --- |
 | Local validation (TEXT_TOO_LONG: no network, no retry, no health) | `src/features/translation/core/QueueManager.test.js`, `src/features/translation/core/RateLimitManager.test.js`, `RateLimitManager.real-policy.test.js`, `src/shared/error-management/ValidationPolicy.test.js`, `src/features/translation/core/CrossLayerRetryBound.test.js`, `src/features/translation/providers/LingvaProvider.test.js` |
 | Rate limit / circuit breaker | `src/features/translation/core/RateLimitManager.test.js`, `RateLimitManager.real-policy.test.js`, `src/shared/error-management/ErrorMatcher.test.js` |
+| Page AI physical concurrency, shared 429, repair and cancellation | `src/core/services/translation/UnifiedModeCoordinator.integration.test.js` (real Custom provider, parser, queue and limiter; mocked physical fetch only) |
 | Queue retry | `src/features/translation/core/QueueManager.test.js`, `src/features/translation/core/CrossLayerRetryBound.test.js` |
 | API-key failover | `src/features/translation/providers/ApiKeyManager.test.js`, `src/features/translation/providers/utils/ProviderRequestEngine.test.js` |
 | Timeout / cancel / late settlement | `src/features/translation/core/managers/OptimizedJsonHandler.test.js`, `src/features/translation/core/StreamingManager.test.js`, `src/features/translation/handlers/handleCancelTranslation.test.js` |
