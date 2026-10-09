@@ -113,6 +113,15 @@ export class PageTranslationManager extends ResourceTracker {
 
   async translatePage(options = {}) {
     let hasAcceptedStart = false;
+    // Keep only accepted node records across the eager SPA session cleanup.
+    const acceptedTranslationSnapshot = options.isAuto && options.preserveAcceptedTranslations && this.bridge.session
+      ? {
+        nodeStorage: this.bridge.session.nodesTranslator?.nodeStorage,
+        document: this.bridge.session.root?.ownerDocument,
+        translationApi: this.bridge.session.translationApi,
+        targetLanguage: this.bridge.session.targetLanguage,
+        settingsRevision: this.bridge.session.settingsRevision,
+      } : null;
 
     // 1. Check for URL change - ALWAYS reset for a clean slate in SPAs
     if (this.currentUrl !== window.location.href) {
@@ -275,6 +284,7 @@ export class PageTranslationManager extends ResourceTracker {
         attempt.sessionContext,
         {
           preserveAcceptedTranslations: !!options.isAuto && !!options.preserveAcceptedTranslations,
+          acceptedTranslationSnapshot,
           settingsRevision: this.translationSettingsRevision,
           onRetainedTranslation: () => {
             if (this._isCurrentPreStartAttempt(attempt)) {

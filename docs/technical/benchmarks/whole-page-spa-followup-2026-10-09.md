@@ -1,6 +1,6 @@
 # Whole-page SPA followup (2026-10-09)
 
-This followup addresses partial translation reported with the first concurrency fix, `6ff3a1eb63694fe7924bc325cb2d45acfd4c62c4`. Its performance measurements remain attributed to that commit in [the original report](whole-page-concurrency-2026-10-09.md).
+This report records the measured followup build `ce5879d82559485903796703f9858543c3f01567`, addressing partial translation reported with the first concurrency fix, `6ff3a1eb63694fe7924bc325cb2d45acfd4c62c4`. Its performance measurements remain attributed to that earlier commit in [the original report](whole-page-concurrency-2026-10-09.md). Subsequent same-document cross-route retention and effective-provider fixes are documented in [the next followup](whole-page-spa-bootstrap-2026-10-09.md).
 
 ## Reproduction and causes
 

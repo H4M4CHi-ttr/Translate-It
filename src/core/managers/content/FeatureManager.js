@@ -915,7 +915,7 @@ export class FeatureManager extends ResourceTracker {
         if (isStale()) return;
         const response = await sendRegularMessage({
           action: MessageActions.PAGE_TRANSLATE,
-          data: { isAuto: true, ...(oldUrl === newUrl && { preserveAcceptedTranslations: true }) },
+          data: { isAuto: true, preserveAcceptedTranslations: true },
         }, { returnFailureResponse: true });
         if (response?.success === false) {
           logger.debug('SPA auto page translation command rejected', response);

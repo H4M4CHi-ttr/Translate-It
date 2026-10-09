@@ -103,7 +103,7 @@ describe('FeatureManager SPA auto page command transport', () => {
     expect(mocks.sendRegularMessage).toHaveBeenCalledOnce();
     expect(mocks.sendRegularMessage).toHaveBeenCalledWith({
       action: MessageActions.PAGE_TRANSLATE,
-      data: { isAuto: true },
+      data: { isAuto: true, preserveAcceptedTranslations: true },
     }, { returnFailureResponse: true });
   });
 

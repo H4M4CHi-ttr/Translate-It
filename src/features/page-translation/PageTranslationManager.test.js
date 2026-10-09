@@ -268,7 +268,7 @@ describe('PageTranslationManager', () => {
       }
     });
 
-    it.each(['delayed notification', 'same-URL history update', 'history round trip'])(
+    it.each(['delayed notification', 'same-URL history update', 'history round trip', 'next SPA route'])(
       'continues route B after %s without resending accepted nodes', async (navigation) => {
       const previousLocation = window.location;
       vi.unstubAllGlobals();
@@ -331,6 +331,7 @@ describe('PageTranslationManager', () => {
         pending[0].resolve(result('Accepted route B translation'));
         await vi.waitFor(() => expect(document.getElementById('accepted').textContent).toContain('Accepted route B translation'));
         if (navigation === 'same-URL history update') window.history.replaceState({}, '', window.location.href);
+        if (navigation === 'next SPA route') window.history.replaceState({}, '', '/route-c');
         if (navigation === 'history round trip') {
           const route = window.location.href;
           window.history.pushState({}, '', '/intermediate-route');
@@ -430,6 +431,37 @@ describe('PageTranslationManager', () => {
       // Check for layout fix injection
       expect(document.getElementById('ti-translation-layout-fix')).not.toBeNull();
       expect(document.documentElement.classList.contains('ti-translation-active')).toBe(true);
+    });
+
+    it.each([
+      { isAuto: true, preserveAcceptedTranslations: true },
+      { isAuto: false, preserveAcceptedTranslations: true },
+      { isAuto: true, preserveAcceptedTranslations: false },
+    ])('passes only a bounded accepted snapshot across cleanup for %j', async (options) => {
+      await manager.activate();
+      manager.currentUrl = 'https://old.example/';
+      const previousController = new AbortController();
+      manager.abortController = previousController;
+      const snapshot = {
+        nodeStorage: new WeakMap(), document,
+        translationApi: 'google', targetLanguage: 'fa', settingsRevision: 0,
+      };
+      manager.bridge.session = {
+        ...snapshot, nodesTranslator: { nodeStorage: snapshot.nodeStorage },
+        root: document.documentElement, controller: previousController, context: Symbol('old'),
+      };
+      manager.bridge.cleanup.mockImplementation(() => { manager.bridge.session = null; });
+
+      await manager.translatePage(options);
+
+      const bridgeOptions = manager.bridge.initialize.mock.calls[0][3];
+      expect(previousController.signal.aborted).toBe(true);
+      expect(manager.bridge.cleanup.mock.invocationCallOrder[0]).toBeLessThan(manager.bridge.initialize.mock.invocationCallOrder[0]);
+      expect(bridgeOptions.acceptedTranslationSnapshot).toEqual(
+        options.isAuto && options.preserveAcceptedTranslations ? snapshot : null
+      );
+      expect(manager.abortController).not.toBe(previousController);
+      expect(manager.sessionContext).not.toBe(manager.bridge.session?.context);
     });
 
     it('handles matching scheduler fatal callback once', () => {

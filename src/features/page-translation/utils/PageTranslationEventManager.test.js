@@ -126,10 +126,77 @@ describe('PageTranslationEventManager', () => {
     });
 
     it('should reset error when TRANSLATION_API changes', () => {
+      mockManager.settings.usesGlobalProvider = true;
+      mockManager.settings.translationApi = 'google';
       const callback = storageManager.on.mock.calls.find(c => c[0] === 'change:TRANSLATION_API')[1];
       callback({ newValue: 'gemini', oldValue: 'google' });
       expect(mockManager.resetError).toHaveBeenCalled();
       expect(mockManager.stopAutoTranslation).toHaveBeenCalledWith({ cancellationReason: 'operation-abort' });
+      expect(mockManager.translationSettingsRevision).toBe(1);
+    });
+
+    it.each(['custom', 'google'])('keeps a Page provider %s running when only the global provider changes', (provider) => {
+      mockManager.settings = { translationApi: provider, isExplicitProvider: false, usesGlobalProvider: false };
+      mockManager.translationSettingsRevision = 7;
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change:TRANSLATION_API')[1];
+
+      callback({ newValue: 'gemini', oldValue: 'google' });
+
+      expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
+      expect(mockManager.resetError).not.toHaveBeenCalled();
+      expect(mockManager.translationSettingsRevision).toBe(7);
+      expect(storageManager.get).not.toHaveBeenCalled();
+    });
+
+    it('preserves an explicitly requested provider when the global provider changes', () => {
+      mockManager.settings = { translationApi: 'google', isExplicitProvider: true, usesGlobalProvider: false };
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change:TRANSLATION_API')[1];
+      callback({ newValue: 'gemini', oldValue: 'google' });
+      expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
+    });
+
+    it('does not stop a newly loaded global session that already uses the changed provider', () => {
+      mockManager.settings = { translationApi: 'gemini', usesGlobalProvider: true };
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change:TRANSLATION_API')[1];
+      callback({ newValue: 'gemini', oldValue: 'google' });
+      expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
+    });
+
+    it('still invalidates before provider-dependency metadata is loaded', () => {
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change:TRANSLATION_API')[1];
+      callback({ newValue: 'gemini', oldValue: 'google' });
+      expect(mockManager.stopAutoTranslation).toHaveBeenCalledOnce();
+    });
+
+    it('invalidates each actual global fallback change immediately without a delayed ABA callback', async () => {
+      mockManager.settings = { translationApi: 'google', usesGlobalProvider: true };
+      const callback = storageManager.on.mock.calls.find(c => c[0] === 'change:TRANSLATION_API')[1];
+      callback({ newValue: 'gemini', oldValue: 'google' });
+      expect(mockManager.stopAutoTranslation).toHaveBeenCalledTimes(1);
+
+      mockManager.settings = { translationApi: 'gemini', usesGlobalProvider: true };
+      callback({ newValue: 'google', oldValue: 'gemini' });
+      expect(mockManager.stopAutoTranslation).toHaveBeenCalledTimes(2);
+      mockManager.settings = { translationApi: 'google', usesGlobalProvider: true };
+      await Promise.resolve();
+      expect(mockManager.stopAutoTranslation).toHaveBeenCalledTimes(2);
+      expect(mockManager.translationSettingsRevision).toBe(2);
+      expect(storageManager.get).not.toHaveBeenCalled();
+    });
+
+    it.each(['global-first', 'mode-first'])('keeps a Page override running during combined global and unrelated mode changes (%s)', (order) => {
+      mockManager.settings = { translationApi: 'custom', usesGlobalProvider: false };
+      const oldModes = { [TranslationMode.Page]: 'custom', [TranslationMode.Selection]: 'google' };
+      const newModes = { ...oldModes, [TranslationMode.Selection]: 'gemini' };
+      const globalChange = storageManager.on.mock.calls.find(c => c[0] === 'change:TRANSLATION_API')[1];
+      const modeChange = storageManager.on.mock.calls.find(c => c[0] === 'change:MODE_PROVIDERS')[1];
+
+      if (order === 'mode-first') modeChange({ oldValue: oldModes, newValue: newModes });
+      globalChange({ oldValue: 'google', newValue: 'gemini' });
+      if (order === 'global-first') modeChange({ oldValue: oldModes, newValue: newModes });
+
+      expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
+      expect(mockManager.resetError).not.toHaveBeenCalled();
     });
 
     it('stops immediately for a page provider change but ignores other modes and unchanged providers', () => {
@@ -140,6 +207,20 @@ describe('PageTranslationEventManager', () => {
       callback({ newValue: { [TranslationMode.Page]: 'openai' }, oldValue: { [TranslationMode.Page]: 'custom' } });
       expect(mockManager.stopAutoTranslation).toHaveBeenCalledOnce();
       expect(mockManager.resetError).toHaveBeenCalledOnce();
+    });
+
+    it.each(['global-first', 'mode-first'])('invalidates an actual Page override change during combined provider changes (%s)', (order) => {
+      mockManager.settings = { translationApi: 'custom', usesGlobalProvider: false };
+      const globalChange = storageManager.on.mock.calls.find(c => c[0] === 'change:TRANSLATION_API')[1];
+      const modeChange = storageManager.on.mock.calls.find(c => c[0] === 'change:MODE_PROVIDERS')[1];
+      const change = { oldValue: { [TranslationMode.Page]: 'custom' }, newValue: { [TranslationMode.Page]: 'openai' } };
+
+      if (order === 'mode-first') modeChange(change);
+      globalChange({ oldValue: 'google', newValue: 'gemini' });
+      if (order === 'global-first') modeChange(change);
+
+      expect(mockManager.stopAutoTranslation).toHaveBeenCalledExactlyOnceWith({ cancellationReason: 'operation-abort' });
+      expect(mockManager.translationSettingsRevision).toBe(1);
     });
 
     it.each([

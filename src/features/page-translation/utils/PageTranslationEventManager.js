@@ -60,7 +60,10 @@ export class PageTranslationEventManager {
   _setupStorageListeners() {
     // Stop obsolete work without reverting translations already committed.
     storageManager.on('change:TRANSLATION_API', ({ newValue, oldValue }) => {
-      if (newValue !== oldValue) {
+      if (newValue !== oldValue
+          && this.manager.settings?.usesGlobalProvider !== false
+          && !this.manager.settings?.isExplicitProvider
+          && newValue !== this.manager.settings?.translationApi) {
         this._invalidateTranslation();
       }
     });

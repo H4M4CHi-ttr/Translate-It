@@ -159,14 +159,21 @@ export class PageTranslationBridge extends ResourceTracker {
 
   async initialize(settings, onTranslateCallback, sessionContext = null, {
     preserveAcceptedTranslations = false, onRetainedTranslation = null, settingsRevision = 0,
+    acceptedTranslationSnapshot = null,
   } = {}) {
-    const previousSession = this.session;
+    const previous = acceptedTranslationSnapshot || (preserveAcceptedTranslations && this.session ? {
+      nodeStorage: this.session.nodesTranslator?.nodeStorage,
+      document: this.session.root?.ownerDocument,
+      translationApi: this.session.translationApi,
+      targetLanguage: this.session.targetLanguage,
+      settingsRevision: this.session.settingsRevision,
+    } : null);
     const previousStorage = preserveAcceptedTranslations
-      && previousSession?.url === window.location.href
-      && previousSession.targetLanguage === settings.targetLanguage
-      && previousSession.translationApi === settings.translationApi
-      && previousSession.settingsRevision === settingsRevision
-      ? previousSession.nodesTranslator?.nodeStorage : null;
+      && previous?.document === document
+      && previous.targetLanguage === settings.targetLanguage
+      && previous.translationApi === settings.translationApi
+      && previous.settingsRevision === settingsRevision
+      ? previous.nodeStorage : null;
     this.cleanup();
     
     // Explicitly set from settings (defaulted to true if undefined)
