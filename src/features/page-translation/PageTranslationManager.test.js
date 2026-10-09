@@ -506,7 +506,7 @@ describe('PageTranslationManager', () => {
       }
     });
 
-    it.each(['delayed notification', 'same-URL history update', 'history round trip', 'next SPA route'])(
+    it.each(['delayed notification', 'same-URL history update', 'history round trip', 'reordered history round trip', 'next SPA route'])(
       'continues route B after %s without resending accepted nodes', async (navigation) => {
       const previousLocation = window.location;
       vi.unstubAllGlobals();
@@ -529,6 +529,7 @@ describe('PageTranslationManager', () => {
       owner.activeFeatures.add('pageTranslation');
       owner._lastDetectedUrl = oldUrl;
       owner._lastSpaNavigation = { url: oldUrl, timeStamp: -Infinity };
+      owner._spaInvalidatedThrough = -Infinity;
       owner.reevaluateFeatures = vi.fn().mockResolvedValue(undefined);
       owner.exclusionChecker.isFeatureAllowed = vi.fn().mockResolvedValue(true);
       mockSpaSettingsManager.isExtensionEnabled.mockReturnValue(true);
@@ -571,19 +572,27 @@ describe('PageTranslationManager', () => {
         await vi.waitFor(() => expect(document.getElementById('accepted').textContent).toContain('Accepted route B translation'));
         if (navigation === 'same-URL history update') window.history.replaceState({}, '', window.location.href);
         if (navigation === 'next SPA route') window.history.replaceState({}, '', '/route-c');
-        if (navigation === 'history round trip') {
+        if (navigation.endsWith('history round trip')) {
           const route = window.location.href;
           window.history.pushState({}, '', '/intermediate-route');
           window.history.replaceState({}, '', route);
         }
 
-        const restarts = navigation === 'history round trip' || navigation === 'next SPA route';
+        const roundTrip = navigation.endsWith('history round trip');
+        const reordered = navigation === 'reordered history round trip';
+        const restarts = roundTrip || navigation === 'next SPA route';
         const controller = manager.abortController;
-        const navigationUrl = navigation === 'history round trip'
+        const navigationUrl = roundTrip
           ? new URL('/intermediate-route', oldUrl).href : window.location.href;
-        manager.eventManager.navigationListener({
-          action: MessageActions.SPA_NAVIGATION, data: { url: navigationUrl, timeStamp: 100 },
-        }, { id: browser.runtime.id });
+        if (reordered) {
+          manager.eventManager.navigationListener({
+            action: MessageActions.SPA_NAVIGATION, data: { url: window.location.href, timeStamp: 20 },
+          }, { id: browser.runtime.id });
+          expect(controller.signal.aborted).toBe(false);
+        }
+        const event = { action: MessageActions.SPA_NAVIGATION, data: { url: navigationUrl, timeStamp: reordered ? 10 : 100 } };
+        manager.eventManager.navigationListener(event, { id: browser.runtime.id });
+        expect(controller.signal.aborted).toBe(restarts);
         await vi.waitFor(() => expect(manager.isAutoTranslating).toBe(true));
         await vi.waitFor(() => expect(pending).toHaveLength(restarts ? 3 : 2));
         expect(controller.signal.aborted).toBe(restarts);
@@ -591,6 +600,15 @@ describe('PageTranslationManager', () => {
         expect(manager.scheduler.recordRetainedTranslation).toHaveBeenCalledTimes(restarts ? 1 : 0);
         expect(pending.filter(item => item.text === 'Accepted route B source')).toHaveLength(1);
         expect(pending.some(item => item.text.includes('Accepted route B translation'))).toBe(false);
+        if (reordered) {
+          const freshController = manager.abortController;
+          await Promise.resolve();
+          await owner.checkForUrlChange({ navigationUrl, navigationTimeStamp: event.data.timeStamp });
+          manager.eventManager.navigationListener(event, { id: browser.runtime.id });
+          expect(freshController.signal.aborted).toBe(false);
+          expect(starts).toHaveBeenCalledTimes(2);
+          expect(pending).toHaveLength(3);
+        }
         const fresh = result('Fresh route B translation');
         const currentRequest = pending.at(-1);
         currentRequest.resolve(fresh);

@@ -33,6 +33,7 @@ export class FeatureManager extends ResourceTracker {
     this._evaluationDebounceTimer = null;
     this._lastDetectedUrl = window.location.href;
     this._lastSpaNavigation = { url: window.location.href, timeStamp: -Infinity };
+    this._spaInvalidatedThrough = -Infinity;
     this._featureRevisions = new Map();
     this._activationPromises = new Map();
     this._navigationRevision = 0;
@@ -835,14 +836,17 @@ export class FeatureManager extends ResourceTracker {
   checkForUrlChange({ navigationUrl, navigationTimeStamp } = {}) {
     const newUrl = window.location.href;
     let missedNavigation = false;
-    if (typeof navigationUrl === 'string' && navigationUrl
-        && Number.isFinite(navigationTimeStamp)
-        && navigationTimeStamp >= this._lastSpaNavigation.timeStamp) {
-      // Browser timestamps deduplicate receivers; only URL evidence can reveal a missed round trip.
-      missedNavigation = navigationUrl !== this._lastSpaNavigation.url && navigationUrl !== newUrl;
-      this._lastSpaNavigation = { url: navigationUrl, timeStamp: navigationTimeStamp };
+    if (typeof navigationUrl === 'string' && navigationUrl && Number.isFinite(navigationTimeStamp)) {
+      // A newer same-URL receipt does not invalidate work for an earlier missed route.
+      // shortcut: covered timestamp ties need event IDs to identify a new round trip; add them if observed.
+      missedNavigation = navigationTimeStamp > this._spaInvalidatedThrough
+        && navigationUrl !== this._lastSpaNavigation.url && navigationUrl !== newUrl;
+      if (navigationTimeStamp >= this._lastSpaNavigation.timeStamp) {
+        this._lastSpaNavigation = { url: navigationUrl, timeStamp: navigationTimeStamp };
+      }
     }
     if (!missedNavigation && newUrl === this._lastDetectedUrl) return false;
+    this._spaInvalidatedThrough = Math.max(this._spaInvalidatedThrough, this._lastSpaNavigation.timeStamp);
 
     const oldUrl = this._lastDetectedUrl;
     this._lastDetectedUrl = newUrl;

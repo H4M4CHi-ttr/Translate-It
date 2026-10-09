@@ -74,6 +74,7 @@ describe('FeatureManager SPA auto page command transport', () => {
     const owner = FeatureManager.getInstance();
     owner.featureHandlers.clear();
     owner._lastSpaNavigation = { url: window.location.href, timeStamp: -Infinity };
+    owner._spaInvalidatedThrough = -Infinity;
     mocks.settingsManager.get.mockImplementation((key, fallback) => {
       if (key === 'WHOLE_PAGE_TRANSLATION_ENABLED') return true;
       if (key === 'WHOLE_PAGE_AUTO_TRANSLATE_RULES') return [{ pattern: 'example.com' }];
@@ -137,6 +138,7 @@ describe('FeatureManager SPA auto page command transport', () => {
     const owner = FeatureManager.getInstance();
     owner._lastDetectedUrl = window.location.href;
     owner._lastSpaNavigation = { url: window.location.href, timeStamp: -Infinity };
+    owner._spaInvalidatedThrough = -Infinity;
     const page = {
       currentUrl: window.location.href, isActive: true, userRestoredOverride: false,
       autoStartCancelledUrls: new Set(),
@@ -189,11 +191,24 @@ describe('FeatureManager SPA auto page command transport', () => {
     expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
   });
 
-  it('ignores an out-of-order event without hiding an actual current URL change', async () => {
+  it('invalidates late away-URL evidence after a newer current-URL notification', async () => {
     const { owner, page } = configureSameUrlPage();
     await owner.checkForUrlChange({ navigationUrl: window.location.href, navigationTimeStamp: 20 });
-    expect(owner.checkForUrlChange(historyNotification(10))).toBe(false);
     expect(page.stopAutoTranslation).not.toHaveBeenCalled();
+    expect(owner._spaInvalidatedThrough).toBe(-Infinity);
+    await owner.checkForUrlChange(historyNotification(10));
+    expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
+    expect(mocks.sendRegularMessage).toHaveBeenCalledOnce();
+    expect(owner._lastSpaNavigation).toEqual({ url: window.location.href, timeStamp: 20 });
+    expect(owner._spaInvalidatedThrough).toBe(20);
+    expect(owner.checkForUrlChange(historyNotification(10))).toBe(false);
+    expect(owner.checkForUrlChange({ ...historyNotification(15), navigationUrl: new URL('/another-away-route', window.location.href).href })).toBe(false);
+    expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
+  });
+
+  it('still observes an actual current URL change when event metadata is old', async () => {
+    const { owner, page } = configureSameUrlPage();
+    await owner.checkForUrlChange({ navigationUrl: window.location.href, navigationTimeStamp: 20 });
     const oldUrl = window.location.href;
     try {
       window.history.replaceState({}, '', '/newest-route');
@@ -202,6 +217,34 @@ describe('FeatureManager SPA auto page command transport', () => {
       expect(owner._lastDetectedUrl).toBe(window.location.href);
     } finally {
       window.history.replaceState({}, '', oldUrl);
+    }
+  });
+
+  it('permits a fresh reordered round trip after the previous invalidation coverage', async () => {
+    const { owner, page } = configureSameUrlPage();
+    await owner.checkForUrlChange({ navigationUrl: window.location.href, navigationTimeStamp: 20 });
+    await owner.checkForUrlChange(historyNotification(10));
+    await owner.checkForUrlChange({ navigationUrl: window.location.href, navigationTimeStamp: 40 });
+    expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
+    await owner.checkForUrlChange(historyNotification(30));
+    expect(page.stopAutoTranslation).toHaveBeenCalledTimes(2);
+    expect(owner._spaInvalidatedThrough).toBe(40);
+    expect(owner.checkForUrlChange(historyNotification(30))).toBe(false);
+    expect(mocks.sendRegularMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('covers received browser evidence when a local URL observation already invalidates work', async () => {
+    const { owner, page } = configureSameUrlPage();
+    const originalUrl = window.location.href;
+    await owner.checkForUrlChange({ navigationUrl: originalUrl, navigationTimeStamp: 20 });
+    try {
+      window.history.replaceState({}, '', '/locally-observed-route');
+      await owner.checkForUrlChange();
+      expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
+      expect(owner.checkForUrlChange(historyNotification(10))).toBe(false);
+      expect(page.stopAutoTranslation).toHaveBeenCalledOnce();
+    } finally {
+      window.history.replaceState({}, '', originalUrl);
     }
   });
 
