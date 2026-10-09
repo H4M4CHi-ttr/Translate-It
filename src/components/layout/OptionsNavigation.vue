@@ -1,20 +1,56 @@
 <template>
-  <nav class="vertical-tabs">
-    <router-link
-      v-for="item in navigationItems"
-      :key="item.name"
-      :to="{ name: item.name }"
-      :class="['tab-button', { active: $route.name === item.name, disabled: item.disabled }]"
+  <div
+    ref="navRoot"
+    class="options-navigation"
+  >
+    <div
+      data-scroll-frame
+      :data-scroll-previous="canScrollPrevious ? '' : null"
+      :data-scroll-next="canScrollNext ? '' : null"
     >
-      {{ t(item.labelKey) }}
-    </router-link>
-    <div class="tabs-action-area">
-      <div
-        id="status"
-        :class="`status-${statusType}`"
+      <button
+        v-if="showArrows && canScrollPrevious"
+        class="tab-scroll-arrow previous"
+        data-scroll-edge="start"
+        :data-scroll-chevron="isVerticalNavigation ? 'up' : 'left'"
+        type="button"
+        :aria-label="t(isVerticalNavigation ? 'options_tabs_scroll_up' : 'options_tabs_scroll_previous')"
+        @click="scrollTabs(-1)"
       >
-        {{ statusMessage }}
-      </div>
+        {{ isVerticalNavigation ? '↑' : '‹' }}
+      </button>
+      <nav
+        ref="tabViewport"
+        class="vertical-tabs tab-viewport"
+        :class="{ 'has-previous': canScrollPrevious, 'has-next': canScrollNext }"
+        @scroll="updateScrollState"
+      >
+        <router-link
+          v-for="item in navigationItems"
+          :key="item.name"
+          :to="{ name: item.name }"
+          :class="['tab-button', { active: $route.name === item.name, disabled: item.disabled }]"
+          :aria-current="$route.name === item.name ? 'page' : undefined"
+        >
+          {{ t(item.labelKey) }}
+        </router-link>
+      </nav>
+      <button
+        v-if="showArrows && canScrollNext"
+        class="tab-scroll-arrow next"
+        data-scroll-edge="end"
+        :data-scroll-chevron="isVerticalNavigation ? 'down' : 'right'"
+        type="button"
+        :aria-label="t(isVerticalNavigation ? 'options_tabs_scroll_down' : 'options_tabs_scroll_next')"
+        @click="scrollTabs(1)"
+      >
+        {{ isVerticalNavigation ? '↓' : '›' }}
+      </button>
+    </div>
+    <div
+      ref="actionArea"
+      class="tabs-action-area"
+    >
       <button 
         id="saveSettings" 
         :disabled="isSaving"
@@ -24,11 +60,24 @@
         {{ t('save_settings_button') || 'Save' }}
       </button>
     </div>
-  </nav>
+    <Teleport
+      :to="toastTarget || 'body'"
+      :disabled="!toastTarget"
+    >
+      <div
+        id="status"
+        :class="['options-status-toast', `status-${statusType}`, { 'is-visible': statusMessage }]"
+        :role="statusType === 'error' ? 'alert' : 'status'"
+        aria-atomic="true"
+      >
+        {{ statusMessage }}
+      </div>
+    </Teleport>
+  </div>
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import './OptionsNavigation.scss'
 import { useRouter } from 'vue-router'
 import { useSettingsStore } from '@/features/settings/stores/settings.js'
@@ -45,9 +94,183 @@ import { CONFIG } from '@/shared/config/config.js'
 const logger = getScopedLogger(LOG_COMPONENTS.UI, 'OptionsNavigation')
 
 const { t, locale } = useUnifiedI18n()
-
 const settingsStore = useSettingsStore()
 const router = useRouter()
+
+const navRoot = ref(null)
+const tabViewport = ref(null)
+const actionArea = ref(null)
+const canScrollPrevious = ref(false)
+const canScrollNext = ref(false)
+const showArrows = ref(false)
+const isVerticalNavigation = ref(false)
+let resizeObserver
+let mutationObserver
+let mutationRevealFrame
+let mutationRevealScheduled = false
+let isUnmounted = false
+let lastViewportWidth
+let lastViewportHeight
+let actionClearanceContainer
+const toastTarget = ref(null)
+const scrollBehavior = () => window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 'auto' : 'smooth'
+
+const updateScrollState = () => {
+  const viewport = tabViewport.value
+  if (!viewport) return
+  const bounds = viewport.getBoundingClientRect()
+  const items = [...viewport.children]
+  const first = items[0]?.getBoundingClientRect()
+  const last = items.at(-1)?.getBoundingClientRect()
+  if (isVerticalNavigation.value) {
+    canScrollPrevious.value = viewport.scrollHeight > viewport.clientHeight && Boolean(first && first.top < bounds.top - 1)
+    canScrollNext.value = viewport.scrollHeight > viewport.clientHeight && Boolean(last && last.bottom > bounds.bottom + 1)
+    showArrows.value = viewport.scrollHeight > viewport.clientHeight
+  } else {
+    const rtl = getComputedStyle(viewport).direction === 'rtl'
+    canScrollPrevious.value = viewport.scrollWidth > viewport.clientWidth && Boolean(rtl ? first && first.right > bounds.right + 1 : first && first.left < bounds.left - 1)
+    canScrollNext.value = viewport.scrollWidth > viewport.clientWidth && Boolean(rtl ? last && last.left < bounds.left - 1 : last && last.right > bounds.right + 1)
+    showArrows.value = viewport.scrollWidth > viewport.clientWidth
+  }
+}
+
+const getUsableBounds = (viewport) => {
+  const bounds = viewport.getBoundingClientRect()
+  const usable = { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom }
+  const rtl = getComputedStyle(viewport).direction === 'rtl'
+  for (const edge of ['previous', 'next']) {
+    const arrow = navRoot.value?.querySelector(`.tab-scroll-arrow.${edge}`)
+    if (!arrow) continue
+    const arrowBounds = arrow.getBoundingClientRect()
+    const intersects = arrowBounds.left < bounds.right && arrowBounds.right > bounds.left
+      && arrowBounds.top < bounds.bottom && arrowBounds.bottom > bounds.top
+    if (!intersects) continue
+    if (isVerticalNavigation.value) {
+      if (edge === 'previous') usable.top = Math.max(usable.top, arrowBounds.bottom)
+      else usable.bottom = Math.min(usable.bottom, arrowBounds.top)
+    } else {
+      const atRight = edge === 'previous' ? rtl : !rtl
+      if (atRight) usable.right = Math.min(usable.right, arrowBounds.left)
+      else usable.left = Math.max(usable.left, arrowBounds.right)
+    }
+  }
+  return usable
+}
+
+const isActiveTabClipped = (viewport, active) => {
+  const bounds = getUsableBounds(viewport)
+  const itemBounds = active.getBoundingClientRect()
+  return isVerticalNavigation.value
+    ? itemBounds.top < bounds.top || itemBounds.bottom > bounds.bottom
+    : itemBounds.left < bounds.left || itemBounds.right > bounds.right
+}
+
+const revealActiveTab = () => {
+  const viewport = tabViewport.value
+  const active = viewport?.querySelector('.tab-button.active')
+  if (!viewport || !active) return
+  if (isActiveTabClipped(viewport, active)) active.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: scrollBehavior() })
+  globalThis.requestAnimationFrame?.(updateScrollState) ?? updateScrollState()
+}
+
+const scrollTabs = (direction) => {
+  const viewport = tabViewport.value
+  if (!viewport) return
+  if (isVerticalNavigation.value) {
+    const bounds = viewport.getBoundingClientRect()
+    const items = [...viewport.children]
+    const candidate = direction < 0
+      ? [...items].reverse().find(el => el.getBoundingClientRect().top < bounds.top - 1)
+      : items.find(el => el.getBoundingClientRect().bottom > bounds.bottom + 1)
+    candidate?.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: scrollBehavior() })
+    return
+  }
+  const rtl = getComputedStyle(viewport).direction === 'rtl'
+  const bounds = viewport.getBoundingClientRect()
+  const items = [...viewport.children]
+  const candidate = direction < 0
+    ? (rtl ? [...items].reverse().find(el => el.getBoundingClientRect().right > bounds.right + 1) : [...items].reverse().find(el => el.getBoundingClientRect().left < bounds.left - 1))
+    : (rtl ? items.find(el => el.getBoundingClientRect().left < bounds.left - 1) : items.find(el => el.getBoundingClientRect().right > bounds.right + 1))
+  candidate?.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: scrollBehavior() })
+}
+
+const touchesTabContent = (record) => {
+  if (record.type !== 'characterData' && record.type !== 'childList') return false
+  let target = record.target
+  if (target.nodeType !== Node.ELEMENT_NODE) target = target.parentElement
+  return Boolean(target?.closest('.tab-button'))
+}
+
+const scheduleMutationReveal = () => {
+  if (mutationRevealScheduled || isUnmounted) return
+  const viewport = tabViewport.value
+  const active = viewport?.querySelector('.tab-button.active')
+  if (!viewport || !active || !isActiveTabClipped(viewport, active)) return
+  mutationRevealScheduled = true
+  const reveal = () => {
+    mutationRevealScheduled = false
+    mutationRevealFrame = undefined
+    if (!isUnmounted) revealActiveTab()
+  }
+  if (globalThis.requestAnimationFrame) mutationRevealFrame = globalThis.requestAnimationFrame(reveal)
+  else reveal()
+}
+
+const handleNavMutations = (records) => {
+  updateScrollState()
+  syncMobileActionHeight()
+  if (records.some(touchesTabContent)) scheduleMutationReveal()
+}
+
+const syncMobileActionHeight = () => {
+  actionClearanceContainer ??= navRoot.value?.closest('.extension-options') || navRoot.value?.closest('.options-main')
+  if (actionArea.value) actionClearanceContainer?.style.setProperty('--mobile-action-height', `${actionArea.value.getBoundingClientRect().height}px`)
+}
+
+const handleWindowResize = () => {
+  const width = tabViewport.value?.getBoundingClientRect().width
+  const height = tabViewport.value?.getBoundingClientRect().height
+  if (width == null || height == null) return
+  const viewportChanged = width !== lastViewportWidth || height !== lastViewportHeight
+  lastViewportWidth = width
+  lastViewportHeight = height
+  isVerticalNavigation.value = window.innerWidth > 1024
+  updateScrollState()
+  if (viewportChanged) revealActiveTab()
+}
+
+onMounted(async () => {
+  await nextTick()
+  actionClearanceContainer = navRoot.value?.closest('.extension-options') || navRoot.value?.closest('.options-main')
+  toastTarget.value = navRoot.value?.closest('.extension-options') || null
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => { updateScrollState(); syncMobileActionHeight() })
+    resizeObserver.observe(tabViewport.value)
+    resizeObserver.observe(actionArea.value)
+  }
+  if (typeof MutationObserver !== 'undefined') {
+    mutationObserver = new MutationObserver(handleNavMutations)
+    mutationObserver.observe(tabViewport.value, { childList: true, subtree: true, characterData: true })
+  }
+  isVerticalNavigation.value = window.innerWidth > 1024
+  updateScrollState()
+  syncMobileActionHeight()
+  lastViewportWidth = tabViewport.value?.getBoundingClientRect().width
+  lastViewportHeight = tabViewport.value?.getBoundingClientRect().height
+  window.addEventListener('resize', handleWindowResize)
+  revealActiveTab()
+})
+onBeforeUnmount(() => {
+  isUnmounted = true
+  if (mutationRevealFrame !== undefined) globalThis.cancelAnimationFrame?.(mutationRevealFrame)
+  mutationRevealScheduled = false
+  resizeObserver?.disconnect()
+  mutationObserver?.disconnect()
+  window.removeEventListener('resize', handleWindowResize)
+  actionClearanceContainer?.style.removeProperty('--mobile-action-height')
+})
+watch(() => router.currentRoute.value.fullPath, async () => { await nextTick(); revealActiveTab() })
+watch(() => locale.value, async () => { await nextTick(); revealActiveTab(); updateScrollState() })
 
 // Navigation items, labels are reactive to language changes
 const navigationItems = ref([
