@@ -45,11 +45,12 @@ describe('SPA navigation listener', () => {
     expect(mocks.referenceFragmentAddListener).toHaveBeenCalledWith(handleSpaNavigation);
   });
 
-  it('forwards top-frame navigation without trusting URL payload', async () => {
-    await handleSpaNavigation({ tabId: 42, frameId: 0, url: 'https://ignored.example/' });
+  it('forwards top-frame browser navigation evidence', async () => {
+    await handleSpaNavigation({ tabId: 42, frameId: 0, url: 'https://example.com/route-b', timeStamp: 123.5 });
 
     expect(mocks.sendMessage).toHaveBeenCalledWith(42, {
       action: MessageActions.SPA_NAVIGATION,
+      data: { url: 'https://example.com/route-b', timeStamp: 123.5 },
     }, {
       frameId: 0,
     });
@@ -60,6 +61,7 @@ describe('SPA navigation listener', () => {
 
     expect(mocks.sendMessage).toHaveBeenCalledWith(42, {
       action: MessageActions.SPA_NAVIGATION,
+      data: { url: null, timeStamp: null },
     }, {
       frameId: 3,
     });
@@ -70,6 +72,7 @@ describe('SPA navigation listener', () => {
 
     expect(mocks.sendMessage).toHaveBeenCalledWith(42, {
       action: MessageActions.SPA_NAVIGATION,
+      data: { url: null, timeStamp: null },
     }, {
       frameId: 27,
     });
@@ -87,6 +90,14 @@ describe('SPA navigation listener', () => {
     await handleSpaNavigation(details);
 
     expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not forward non-primitive or non-finite navigation evidence', async () => {
+    await handleSpaNavigation({ tabId: 42, frameId: 0, url: {}, timeStamp: NaN });
+    expect(mocks.sendMessage).toHaveBeenCalledWith(42, {
+      action: MessageActions.SPA_NAVIGATION,
+      data: { url: null, timeStamp: null },
+    }, { frameId: 0 });
   });
 
   it('contains tab message failures', async () => {

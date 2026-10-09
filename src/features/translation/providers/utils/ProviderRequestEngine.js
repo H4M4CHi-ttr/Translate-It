@@ -13,6 +13,7 @@ import { ErrorTypes } from "@/shared/error-management/ErrorTypes.js";
 import { matchErrorToType } from "@/shared/error-management/ErrorMatcher.js";
 import { ProviderNames, TranslationCallPurpose } from "@/features/translation/providers/ProviderConstants.js";
 import { appendTranslationDiagnostic } from '@/features/translation/ir/TranslationOperation.js';
+import { rateLimitManager } from '@/features/translation/core/RateLimitManager.js';
 
 const logger = getScopedLogger(LOG_COMPONENTS.TRANSLATION, 'ProviderRequestEngine');
 
@@ -361,8 +362,6 @@ export const ProviderRequestEngine = {
         }];
       });
     
-    const startTime = Date.now();
-
     try {
       const finalFetchOptions = { ...fetchOptions };
       if (abortController) {
@@ -376,6 +375,11 @@ export const ProviderRequestEngine = {
       // Capture proxy configuration for this physical attempt.
       const proxyConfig = await provider._initializeProxy();
 
+      if (provider.constructor.isAI) {
+        await rateLimitManager.waitForCooldown(provider.providerName, abortController?.signal);
+      }
+
+      const startTime = Date.now();
       const response = await proxyManager.fetch(url, finalFetchOptions, proxyConfig);
       const duration = Date.now() - startTime;
       const retryAt = parseRetryAt(response);
@@ -486,6 +490,9 @@ export const ProviderRequestEngine = {
         if (providerCode !== undefined) err.code = providerCode;
         if (errorType === ErrorTypes.RATE_LIMIT_REACHED && retryAt !== undefined) {
           err.retryAt = retryAt;
+        }
+        if (provider.constructor.isAI && errorType === ErrorTypes.RATE_LIMIT_REACHED) {
+          rateLimitManager.notifyRateLimit(provider.providerName, err);
         }
         throw err;
       }

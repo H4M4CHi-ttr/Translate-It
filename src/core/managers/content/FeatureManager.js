@@ -32,6 +32,8 @@ export class FeatureManager extends ResourceTracker {
     this._evaluationQueue = [];
     this._evaluationDebounceTimer = null;
     this._lastDetectedUrl = window.location.href;
+    this._lastSpaNavigation = { url: window.location.href, timeStamp: -Infinity };
+    this._spaInvalidatedThrough = -Infinity;
     this._featureRevisions = new Map();
     this._activationPromises = new Map();
     this._navigationRevision = 0;
@@ -831,18 +833,34 @@ export class FeatureManager extends ResourceTracker {
     }
   }
 
-  checkForUrlChange() {
+  checkForUrlChange({ navigationUrl, navigationTimeStamp } = {}) {
     const newUrl = window.location.href;
-    if (newUrl === this._lastDetectedUrl) return false;
+    let missedNavigation = false;
+    if (typeof navigationUrl === 'string' && navigationUrl && Number.isFinite(navigationTimeStamp)) {
+      // A newer same-URL receipt does not invalidate work for an earlier missed route.
+      // shortcut: covered timestamp ties need event IDs to identify a new round trip; add them if observed.
+      missedNavigation = navigationTimeStamp > this._spaInvalidatedThrough
+        && navigationUrl !== this._lastSpaNavigation.url && navigationUrl !== newUrl;
+      if (navigationTimeStamp >= this._lastSpaNavigation.timeStamp) {
+        this._lastSpaNavigation = { url: navigationUrl, timeStamp: navigationTimeStamp };
+      }
+    }
+    if (!missedNavigation && newUrl === this._lastDetectedUrl) return false;
+    this._spaInvalidatedThrough = Math.max(this._spaInvalidatedThrough, this._lastSpaNavigation.timeStamp);
 
     const oldUrl = this._lastDetectedUrl;
     this._lastDetectedUrl = newUrl;
     this._navigationRevision += 1;
     const capturedRevision = this._navigationRevision;
+    const pageManager = this.featureHandlers.get('pageTranslation');
+    pageManager?.stopAutoTranslation({ cancellationReason: 'operation-abort' }).catch(() => {
+      logger.warn('Stopping obsolete page translation on navigation failed');
+    });
     return this.handleUrlChange(oldUrl, newUrl, capturedRevision);
   }
 
   async handleUrlChange(oldUrl, newUrl, expectedRevision = null) {
+    if (expectedRevision !== null && this._isNavigationStale(expectedRevision)) return;
     let capturedRevision;
     if (expectedRevision !== null) {
       capturedRevision = expectedRevision;
@@ -910,7 +928,7 @@ export class FeatureManager extends ResourceTracker {
         if (isStale()) return;
         const response = await sendRegularMessage({
           action: MessageActions.PAGE_TRANSLATE,
-          data: { isAuto: true },
+          data: { isAuto: true, preserveAcceptedTranslations: true },
         }, { returnFailureResponse: true });
         if (response?.success === false) {
           logger.debug('SPA auto page translation command rejected', response);
