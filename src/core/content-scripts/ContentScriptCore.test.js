@@ -40,11 +40,12 @@ describe('Vue infrastructure frame contract', () => {
     );
     expect(registration).toBeDefined();
 
-    await registration[1]({ data: { url: 'https://example.com/new-route', timeStamp: 123 } });
+    const navigationCursor = { documentEpoch: 1, routeRevision: 2, url: 'https://example.com/new-route' };
+    await registration[1]({ data: { navigationCursor } });
 
     expect(featureManagerMock.initialize).toHaveBeenCalledOnce();
     expect(featureManagerMock.checkForUrlChange).toHaveBeenCalledExactlyOnceWith({
-      navigationUrl: 'https://example.com/new-route', navigationTimeStamp: 123,
+      navigationCursor, navigationUnavailable: undefined,
     });
   });
 
@@ -66,11 +67,12 @@ describe('Vue infrastructure frame contract', () => {
     );
     expect(registration).toBeDefined();
 
-    await registration[1]({ data: { url: 'https://frame.example.com/#two', timeStamp: 456 } });
+    const navigationCursor = { documentEpoch: 2, routeRevision: 1, url: 'https://frame.example.com/#two' };
+    await registration[1]({ data: { navigationCursor } });
 
     expect(featureManagerMock.initialize).toHaveBeenCalledOnce();
     expect(featureManagerMock.checkForUrlChange).toHaveBeenCalledExactlyOnceWith({
-      navigationUrl: 'https://frame.example.com/#two', navigationTimeStamp: 456,
+      navigationCursor, navigationUnavailable: undefined,
     });
   });
 

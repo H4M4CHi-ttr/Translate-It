@@ -1236,7 +1236,7 @@ describe('ProviderRequestEngine', () => {
       expect(error.cause).toBeDefined();
     });
 
-    it('preserves explicit user cancellation for an aborted transport call', async () => {
+    it('preserves explicit user cancellation without sending an already-aborted call', async () => {
       const controller = new AbortController();
       controller.abort('user-cancelled');
       proxyManager.fetch.mockRejectedValue(new DOMException('Aborted', 'AbortError'));
@@ -1245,7 +1245,8 @@ describe('ProviderRequestEngine', () => {
       await expect(ProviderRequestEngine.executeApiCall(mockProvider, { ...baseParams(), abortController: controller }))
         .rejects.toMatchObject({ type: ErrorTypes.USER_CANCELLED });
 
-      expect(statsManager.recordRequest).toHaveBeenCalledTimes(1);
+      expect(proxyManager.fetch).not.toHaveBeenCalled();
+      expect(statsManager.recordRequest).not.toHaveBeenCalled();
       expect(statsManager.recordError).not.toHaveBeenCalled();
     });
 

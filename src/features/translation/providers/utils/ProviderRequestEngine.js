@@ -333,10 +333,9 @@ export const ProviderRequestEngine = {
     const finalCharCount = charCount || 0;
     const finalOriginalCharCount = originalCharCount || 0;
 
-    const { globalCallId, sessionCallId } = statsManager.recordRequest(provider.providerName, finalSessionId, finalCharCount, finalOriginalCharCount, normalizedCallPurpose);
-
     // MOCK BYPASS: If URL is a mock protocol, skip actual fetch but keep stats and logs
     if (url.startsWith('mock://')) {
+      const { globalCallId } = statsManager.recordRequest(provider.providerName, finalSessionId, finalCharCount, finalOriginalCharCount, normalizedCallPurpose);
       const mockDuration = 100 + Math.random() * 200;
       logger.debugLazy(() => {
         return [`[Call #${globalCallId}] Mock Engine Bypass: 200 OK (${mockDuration.toFixed(0)}ms)`, {
@@ -348,20 +347,6 @@ export const ProviderRequestEngine = {
       return { status: 200, ok: true, json: async () => ({ mock: true }) };
     }
 
-    const sessionTag = finalSessionId ? ` [Session: ${finalSessionId.substring(0, 8)}${sessionCallId > 0 ? ` #${sessionCallId}` : ''}]` : '';
-    
-    // CENTRALIZED SMART LOGGING: REQUEST
-      logger.debugLazy(() => {
-        const sanitizedUrl = this._maskSensitiveData(url);
-        const payload = this._parsePayload(fetchOptions.body);
-
-        return [`[Call #${globalCallId}]${sessionTag} Request: ${sanitizedUrl}`, {
-          context,
-          charCount: finalCharCount,
-          payloadType: payload ? (Array.isArray(payload) ? 'array' : typeof payload) : 'empty',
-        }];
-      });
-    
     try {
       const finalFetchOptions = { ...fetchOptions };
       if (abortController) {
@@ -378,6 +363,22 @@ export const ProviderRequestEngine = {
       if (provider.constructor.isAI) {
         await rateLimitManager.waitForCooldown(provider.providerName, abortController?.signal);
       }
+      if (abortController?.signal?.aborted) throw createOperationAbortError(abortController.signal);
+
+      const { globalCallId, sessionCallId } = statsManager.recordRequest(provider.providerName, finalSessionId, finalCharCount, finalOriginalCharCount, normalizedCallPurpose);
+      const sessionTag = finalSessionId ? ` [Session: ${finalSessionId.substring(0, 8)}${sessionCallId > 0 ? ` #${sessionCallId}` : ''}]` : '';
+
+      // CENTRALIZED SMART LOGGING: REQUEST
+      logger.debugLazy(() => {
+        const sanitizedUrl = this._maskSensitiveData(url);
+        const payload = this._parsePayload(fetchOptions.body);
+
+        return [`[Call #${globalCallId}]${sessionTag} Request: ${sanitizedUrl}`, {
+          context,
+          charCount: finalCharCount,
+          payloadType: payload ? (Array.isArray(payload) ? 'array' : typeof payload) : 'empty',
+        }];
+      });
 
       const startTime = Date.now();
       const response = await proxyManager.fetch(url, finalFetchOptions, proxyConfig);

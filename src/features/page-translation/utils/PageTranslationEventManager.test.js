@@ -89,9 +89,10 @@ describe('PageTranslationEventManager', () => {
       mockManager.isTranslating = true;
       const callback = mockManager.addEventListener.mock.calls[0][2];
 
-      expect(callback({ action: MessageActions.SPA_NAVIGATION, data: { url: window.location.href, timeStamp: 100 } }, { id: browser.runtime.id })).toBeUndefined();
+      const navigationCursor = { documentEpoch: 1, routeRevision: 2, url: window.location.href };
+      expect(callback({ action: MessageActions.SPA_NAVIGATION, data: { navigationCursor } }, { id: browser.runtime.id })).toBeUndefined();
       expect(mockManager.featureManager.checkForUrlChange).toHaveBeenCalledExactlyOnceWith({
-        navigationUrl: window.location.href, navigationTimeStamp: 100,
+        navigationCursor, navigationUnavailable: undefined,
       });
       expect(mockManager.stopAutoTranslation).not.toHaveBeenCalled();
       expect(mockManager.currentUrl).toBe(window.location.href);

@@ -113,6 +113,17 @@ export class PageTranslationManager extends ResourceTracker {
   }
 
   async translatePage(options = {}) {
+    if (options.navigationUnavailable) {
+      void this.stopAutoTranslation({ cancellationReason: INTERNAL_CANCELLATION_REASON });
+      return { success: false, reason: ActionReasons.SILENT_ERROR };
+    }
+    const cursor = options.navigationCursor;
+    if (Object.hasOwn(options, 'navigationCursor') && (
+      !Number.isSafeInteger(cursor?.documentEpoch) || cursor.documentEpoch <= 0
+      || !Number.isSafeInteger(cursor.routeRevision) || cursor.routeRevision < 0
+      || cursor.url !== window.location.href
+      || (this.featureManager && !this.featureManager.acceptPageNavigation?.(cursor))
+    )) return { success: false, reason: ActionReasons.SILENT_ERROR };
     let hasAcceptedStart = false;
     // 1. Check for URL change - ALWAYS reset for a clean slate in SPAs
     if (this.currentUrl !== window.location.href) {

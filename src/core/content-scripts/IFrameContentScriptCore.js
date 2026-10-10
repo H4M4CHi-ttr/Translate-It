@@ -18,8 +18,8 @@ export function IFrameContentScriptCore() {
       const featureManager = FeatureManager.getInstance();
       await featureManager.initialize();
       await featureManager.checkForUrlChange({
-        navigationUrl: message?.data?.url,
-        navigationTimeStamp: message?.data?.timeStamp,
+        navigationCursor: message?.data?.navigationCursor,
+        navigationUnavailable: message?.data?.navigationUnavailable,
       });
       return { success: true };
     });

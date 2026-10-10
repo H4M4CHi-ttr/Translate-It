@@ -506,7 +506,7 @@ describe('PageTranslationManager', () => {
       }
     });
 
-    it.each(['delayed notification', 'same-URL history update', 'history round trip', 'reordered history round trip', 'next SPA route'])(
+    it.each(['delayed notification', 'same-URL history update', 'history round trip', 'reordered history round trip', 'repeated history round trip', 'admission history round trip', 'next SPA route'])(
       'continues route B after %s without resending accepted nodes', async (navigation) => {
       const previousLocation = window.location;
       vi.unstubAllGlobals();
@@ -528,8 +528,7 @@ describe('PageTranslationManager', () => {
       owner.featureHandlers.set('pageTranslation', manager);
       owner.activeFeatures.add('pageTranslation');
       owner._lastDetectedUrl = oldUrl;
-      owner._lastSpaNavigation = { url: oldUrl, timeStamp: -Infinity };
-      owner._spaInvalidatedThrough = -Infinity;
+      owner.navigationCursor = null;
       owner.reevaluateFeatures = vi.fn().mockResolvedValue(undefined);
       owner.exclusionChecker.isFeatureAllowed = vi.fn().mockResolvedValue(true);
       mockSpaSettingsManager.isExtensionEnabled.mockReturnValue(true);
@@ -549,10 +548,11 @@ describe('PageTranslationManager', () => {
         pending.push({ text, context, node, resolve });
       }));
       const starts = vi.fn();
+      let producerCursor = { documentEpoch: 1, routeRevision: 0, url: oldUrl };
       sendRegularMessage.mockImplementation(async (message) => {
         if (message.action === MessageActions.PAGE_TRANSLATE) {
           starts();
-          return manager.translatePage(message.data);
+          return manager.translatePage({ ...message.data, navigationCursor: producerCursor });
         }
         return { success: true };
       });
@@ -561,6 +561,7 @@ describe('PageTranslationManager', () => {
         await manager.activate();
         document.body.innerHTML = '<p id="accepted">Accepted route B source</p><p id="pending">Pending route B source</p>';
         window.history.replaceState({}, '', new URL('/route-b', oldUrl).href);
+        producerCursor = { ...producerCursor, url: window.location.href };
         await owner.checkForUrlChange();
         await vi.waitFor(() => expect(pending).toHaveLength(2));
         expect(manager.isAutoTranslating).toBe(true);
@@ -580,18 +581,32 @@ describe('PageTranslationManager', () => {
 
         const roundTrip = navigation.endsWith('history round trip');
         const reordered = navigation === 'reordered history round trip';
+        const repeated = navigation === 'repeated history round trip';
+        const admissionOnly = navigation === 'admission history round trip';
         const restarts = roundTrip || navigation === 'next SPA route';
         const controller = manager.abortController;
         const navigationUrl = roundTrip
           ? new URL('/intermediate-route', oldUrl).href : window.location.href;
+        const capturedCursor = { documentEpoch: 1, routeRevision: restarts ? 1 : 0, url: navigationUrl };
+        producerCursor = { ...capturedCursor, routeRevision: roundTrip ? 2 : capturedCursor.routeRevision, url: window.location.href };
         if (reordered) {
           manager.eventManager.navigationListener({
-            action: MessageActions.SPA_NAVIGATION, data: { url: window.location.href, timeStamp: 20 },
+            action: MessageActions.SPA_NAVIGATION, data: { navigationCursor: producerCursor },
           }, { id: browser.runtime.id });
-          expect(controller.signal.aborted).toBe(false);
+          expect(controller.signal.aborted).toBe(true);
         }
-        const event = { action: MessageActions.SPA_NAVIGATION, data: { url: navigationUrl, timeStamp: reordered ? 10 : 100 } };
-        manager.eventManager.navigationListener(event, { id: browser.runtime.id });
+        const event = { action: MessageActions.SPA_NAVIGATION, data: { navigationCursor: capturedCursor } };
+        if (admissionOnly) {
+          await sendRegularMessage({ action: MessageActions.PAGE_TRANSLATE, data: { isAuto: true, preserveAcceptedTranslations: true } });
+          const admittedController = manager.abortController;
+          const admittedSession = manager.translationMessageId;
+          expect((await manager.translatePage({
+            isAuto: true, navigationCursor: { documentEpoch: 1, routeRevision: 0, url: window.location.href },
+          })).success).toBe(false);
+          expect(manager.abortController).toBe(admittedController);
+          expect(manager.translationMessageId).toBe(admittedSession);
+          expect(admittedController.signal.aborted).toBe(false);
+        } else manager.eventManager.navigationListener(event, { id: browser.runtime.id });
         expect(controller.signal.aborted).toBe(restarts);
         await vi.waitFor(() => expect(manager.isAutoTranslating).toBe(true));
         await vi.waitFor(() => expect(pending).toHaveLength(restarts ? 3 : 2));
@@ -603,11 +618,37 @@ describe('PageTranslationManager', () => {
         if (reordered) {
           const freshController = manager.abortController;
           await Promise.resolve();
-          await owner.checkForUrlChange({ navigationUrl, navigationTimeStamp: event.data.timeStamp });
+          await owner.checkForUrlChange({ navigationCursor: capturedCursor });
           manager.eventManager.navigationListener(event, { id: browser.runtime.id });
           expect(freshController.signal.aborted).toBe(false);
           expect(starts).toHaveBeenCalledTimes(2);
           expect(pending).toHaveLength(3);
+        }
+        if (repeated) {
+          const heldRequest = pending.at(-1);
+          const heldController = manager.abortController;
+          const route = window.location.href;
+          window.history.pushState({}, '', navigationUrl);
+          window.history.replaceState({}, '', route);
+          producerCursor = { documentEpoch: 1, routeRevision: 4, url: route };
+          manager.eventManager.navigationListener({
+            action: MessageActions.SPA_NAVIGATION, data: { navigationCursor: { ...producerCursor, routeRevision: 3, url: navigationUrl } },
+          }, { id: browser.runtime.id });
+          manager.eventManager.navigationListener({
+            action: MessageActions.SPA_NAVIGATION, data: { navigationCursor: producerCursor },
+          }, { id: browser.runtime.id });
+          manager.eventManager.navigationListener({
+            action: MessageActions.SPA_NAVIGATION, data: { navigationCursor: { ...producerCursor, routeRevision: 2 } },
+          }, { id: browser.runtime.id });
+          expect(heldController.signal.aborted).toBe(true);
+          await vi.waitFor(() => expect(pending).toHaveLength(4));
+          expect(starts).toHaveBeenCalledTimes(3);
+          expect(manager.scheduler.recordRetainedTranslation).toHaveBeenCalledTimes(2);
+          expect(pending.some(item => item.text.includes('Accepted route B translation'))).toBe(false);
+          const obsolete = result('Obsolete second round-trip translation');
+          heldRequest.resolve(obsolete);
+          await vi.waitFor(() => expect(obsolete.state).toBe('cancelled'));
+          expect(document.body.textContent).not.toContain('Obsolete');
         }
         const fresh = result('Fresh route B translation');
         const currentRequest = pending.at(-1);
@@ -644,6 +685,33 @@ describe('PageTranslationManager', () => {
       }
       }
     );
+
+    it.each([null, {}, { documentEpoch: 0, routeRevision: 0, url: 'x' }, {
+      documentEpoch: 1, routeRevision: 0, url: 'https://different-document.example/',
+    }])('rejects malformed or non-live Page command cursor %o before destructive preparation', async navigationCursor => {
+      manager.currentUrl = 'https://previous.example/';
+      await expect(manager.translatePage({ navigationCursor })).resolves.toEqual({ success: false, reason: ActionReasons.SILENT_ERROR });
+      expect(manager.currentUrl).toBe('https://previous.example/');
+      expect(manager.bridge.cleanup).not.toHaveBeenCalled();
+      expect(PageTranslationSettingsLoader.load).not.toHaveBeenCalled();
+    });
+
+    it('rejects a Page command when producer persistence is unavailable', async () => {
+      expect((await manager.translatePage({ navigationUnavailable: true })).success).toBe(false);
+      expect(PageTranslationSettingsLoader.load).not.toHaveBeenCalled();
+      expect(manager.bridge.initialize).not.toHaveBeenCalled();
+    });
+
+    it('stops older active work without auto-restart when Page admission persistence becomes unavailable', async () => {
+      await manager.translatePage();
+      const controller = manager.abortController;
+      expect((await manager.translatePage({ navigationUnavailable: true })).success).toBe(false);
+      expect(controller.signal.aborted).toBe(true);
+      expect(manager.isTranslating).toBe(false);
+      expect(manager.isAutoTranslating).toBe(false);
+      expect(manager.userRestoredOverride).toBe(false);
+      expect(PageTranslationSettingsLoader.load).toHaveBeenCalledOnce();
+    });
 
     it('publishes aggregate lifecycle through trusted runtime transport', async () => {
       const data = { translatedCount: 2, totalCount: 3, frameUrl: 'fake' };
