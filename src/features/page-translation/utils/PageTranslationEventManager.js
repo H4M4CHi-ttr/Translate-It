@@ -46,8 +46,8 @@ export class PageTranslationEventManager {
           || sender?.id !== browser.runtime.id
           || sender?.tab) return;
       void this.manager.featureManager?.checkForUrlChange({
-        navigationUrl: message.data?.url,
-        navigationTimeStamp: message.data?.timeStamp,
+        navigationCursor: message.data?.navigationCursor,
+        navigationUnavailable: message.data?.navigationUnavailable,
       });
     };
     this.manager.addEventListener(browser.runtime.onMessage, 'message', this.navigationListener);
