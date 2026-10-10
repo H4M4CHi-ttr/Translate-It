@@ -169,6 +169,32 @@ describe('PAGE_TRANSLATE producer cursor admission', () => {
     expect(browser.tabs.sendMessage.mock.calls[0][1].data).toEqual({ navigationUnavailable: true });
   });
 
+  it('keeps active child navigation tracking when later Page frame discovery fails', async () => {
+    setupFrames([{ frameId: 0, response: { success: true } }, { frameId: 7, response: { success: true } }]);
+    await handlePageTranslation({ action: MessageActions.PAGE_TRANSLATE }, sender);
+    const initial = structuredClone(navigationStore.saved);
+    const child = await pageNavigationTracker.getCursor(42, 7);
+    browser.storage.session.set.mockClear();
+    browser.tabs.sendMessage.mockClear();
+    browser.webNavigation.getAllFrames.mockRejectedValueOnce(new Error('discovery unavailable'));
+    browser.tabs.sendMessage.mockResolvedValueOnce({ success: false, reason: ActionReasons.SILENT_ERROR });
+
+    await handlePageTranslation({ action: MessageActions.PAGE_TRANSLATE }, sender);
+
+    expect(browser.tabs.sendMessage).toHaveBeenCalledOnce();
+    expect(browser.tabs.sendMessage.mock.calls[0][1].data).toEqual({ navigationUnavailable: true });
+    expect(browser.tabs.sendMessage.mock.calls[0][2]).toEqual({ frameId: 0 });
+    expect(await pageNavigationTracker.getCursor(42, 7)).toEqual(child);
+    expect(navigationStore.saved).toEqual(initial);
+    expect(browser.storage.session.set).not.toHaveBeenCalled();
+    expect(await pageNavigationTracker.capture(42, 7, 'https://frame-7.example/b')).toMatchObject({ documentEpoch: child.documentEpoch, routeRevision: 1 });
+    expect(await pageNavigationTracker.capture(42, 7, child.url)).toEqual({ ...child, routeRevision: 2 });
+
+    browser.webNavigation.getAllFrames.mockResolvedValueOnce([{ frameId: 0, url: 'https://example.com' }]);
+    await handlePageTranslation({ action: MessageActions.PAGE_TRANSLATE }, sender);
+    expect(await pageNavigationTracker.getCursor(42, 7)).toBeNull();
+  });
+
   it.each([null, { url: '' }, 'rejected'])(
     'sends unavailable admission without a stale baseline when the frame API returns %o', async frame => {
       setupFrames([{ frameId: 0, response: { success: false, reason: ActionReasons.SILENT_ERROR } }]);

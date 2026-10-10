@@ -981,6 +981,25 @@ describe('PageTranslationManager', () => {
       );
     });
 
+    it.each(['accepted-stop-session', 'pending-start-session'])(
+      'cleans the accepted language-resolution session on stop while current ID is %s', async currentId => {
+        manager.isAutoTranslating = true;
+        manager.isTranslating = true;
+        manager.translationMessageId = currentId;
+        manager.acceptedLifecycleSessionId = 'accepted-stop-session';
+        manager.abortController = new AbortController();
+
+        await manager.stopAutoTranslation({ cancellationReason: 'operation-abort' });
+
+        expect(sendRegularMessage).toHaveBeenCalledWith({
+          action: MessageActions.CANCEL_SESSION, data: { sessionId: 'accepted-stop-session' },
+        });
+        expect(manager.translationMessageId).toBe(currentId === 'accepted-stop-session' ? null : currentId);
+        expect(manager.acceptedLifecycleSessionId).toBe('accepted-stop-session');
+        expect(manager.bridge.restore).not.toHaveBeenCalled();
+      }
+    );
+
     it.each(['TARGET_LANGUAGE', 'CUSTOM_API_MODEL'])(
       'invalidates a non-auto lazy idle session on %s change, preserving completed nodes', async (key) => {
         const { PageTranslationBridge: RealBridge } = await vi.importActual('./PageTranslationBridge.js');

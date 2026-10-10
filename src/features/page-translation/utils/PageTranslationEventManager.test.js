@@ -8,6 +8,7 @@ import { ErrorTypes } from '@/shared/error-management/ErrorTypes.js';
 import { pageEventBus } from '@/core/PageEventBus.js';
 import { TranslationMode } from '@/config.js';
 import { ApiKeyManager } from '@/features/translation/providers/ApiKeyManager.js';
+import ResourceTracker from '@/core/memory/ResourceTracker.js';
 
 // Mock storageManager
 vi.mock('@/shared/storage/core/StorageCore.js', () => ({
@@ -38,6 +39,8 @@ describe('PageTranslationEventManager', () => {
     vi.clearAllMocks();
     storageManager.get.mockReset();
     storageManager.set.mockReset();
+    storageManager.on.mockReset();
+    storageManager.off.mockReset();
     browser.runtime.id = 'test-extension';
     
     // Reset global state
@@ -56,7 +59,10 @@ describe('PageTranslationEventManager', () => {
         error: vi.fn(),
         warn: vi.fn()
       },
-      addEventListener: vi.fn((target, _event, handler) => target.addListener(handler)),
+      addEventListener: vi.fn((target, event, handler) => {
+        if (typeof target.on === 'function') target.on(event, handler);
+        else target.addListener(handler);
+      }),
       featureManager: { checkForUrlChange: vi.fn().mockResolvedValue(undefined) },
       removeEventListener: vi.fn((target, _event, handler) => target.removeListener(handler)),
       settings: {
@@ -111,17 +117,54 @@ describe('PageTranslationEventManager', () => {
     it('registers once, removes the tracked listener and registers again after reactivation', () => {
       const listener = eventManager.navigationListener;
       eventManager.initialize();
-      expect(mockManager.addEventListener).toHaveBeenCalledOnce();
+      expect(mockManager.addEventListener.mock.calls.filter(([target]) => target === browser.runtime.onMessage)).toHaveLength(1);
       eventManager.destroy();
       eventManager.destroy();
       expect(mockManager.removeEventListener).toHaveBeenCalledExactlyOnceWith(browser.runtime.onMessage, 'message', listener);
       eventManager.initialize();
-      expect(mockManager.addEventListener).toHaveBeenCalledTimes(2);
+      expect(mockManager.addEventListener.mock.calls.filter(([target]) => target === browser.runtime.onMessage)).toHaveLength(2);
       expect(eventManager.navigationListener).not.toBe(listener);
     });
   });
 
   describe('Storage Listeners', () => {
+    it('releases retired settings listeners and registers once on reactivation', () => {
+      const listeners = new Map();
+      storageManager.on.mockImplementation((event, callback) => {
+        if (!listeners.has(event)) listeners.set(event, new Set());
+        listeners.get(event).add(callback);
+      });
+      storageManager.off.mockImplementation((event, callback) => listeners.get(event)?.delete(callback));
+      const owner = Object.assign(new ResourceTracker('page-settings-lifecycle-test'), {
+        logger: mockManager.logger,
+        settings: { translationApi: 'custom' },
+        stopAutoTranslation: vi.fn().mockResolvedValue({ success: true }),
+        resetError: vi.fn(),
+      });
+      const events = new PageTranslationEventManager(owner);
+      const changeTarget = () => listeners.get('change')?.forEach(callback => callback({
+        key: 'TARGET_LANGUAGE', oldValue: 'ja', newValue: 'en',
+      }));
+      try {
+        changeTarget();
+        expect(owner.stopAutoTranslation).toHaveBeenCalledOnce();
+        events.destroy();
+        owner.cleanup();
+        changeTarget();
+        expect(owner.stopAutoTranslation).toHaveBeenCalledOnce();
+        expect([...listeners.values()].every(callbacks => callbacks.size === 0)).toBe(true);
+
+        events.initialize();
+        events.initialize();
+        changeTarget();
+        expect(owner.stopAutoTranslation).toHaveBeenCalledTimes(2);
+      } finally {
+        events.destroy();
+        owner.cleanup();
+      }
+      expect([...listeners.values()].every(callbacks => callbacks.size === 0)).toBe(true);
+    });
+
     it('should register storage listeners on init', () => {
       expect(storageManager.on).toHaveBeenCalledWith('change:TRANSLATION_API', expect.any(Function));
       expect(storageManager.on).toHaveBeenCalledWith('change:MODE_PROVIDERS', expect.any(Function));

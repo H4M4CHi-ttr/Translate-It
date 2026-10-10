@@ -174,6 +174,36 @@ describe('Page navigation producer cursor', () => {
     expect(await tracker.getCursor(42, 7)).toBeNull();
   });
 
+  it.each([
+    { description: 'discovery falls back to a frame without a URL', discovered: [{ frameId: 0 }] },
+    { description: 'a valid new frame precedes an invalid frame', discovered: [{ frameId: 9, url: 'https://new.example' }, { frameId: 0 }] },
+    { description: 'a frame has an invalid ID', discovered: [{ frameId: 0, url: frames[0].url }, { frameId: -1, url: 'https://new.example' }] },
+    { description: 'a frame entry is null', discovered: [null] },
+    { description: 'a frame entry is missing', discovered: Array(1) },
+    { description: 'the frame list is not an array', discovered: null },
+  ])('preserves tracked frames and the epoch allocator when $description', async ({ discovered }) => {
+    await tracker.seed(42, frames);
+    const initial = structuredClone(saved);
+    const child = await tracker.getCursor(42, 7);
+    storage.set.mockClear();
+
+    await expect(tracker.seed(42, discovered)).rejects.toThrow('Invalid Page frame');
+
+    expect(await tracker.getCursor(42, 0)).toEqual(initial.pageTranslationNavigation.frames['42:0']);
+    expect(await tracker.getCursor(42, 7)).toEqual(child);
+    expect(await tracker.getCursor(42, 9)).toBeNull();
+    expect(saved).toEqual(initial);
+    expect(storage.set).not.toHaveBeenCalled();
+
+    await tracker.seed(43, [frames[0]]);
+    expect((await tracker.getCursor(43, 0)).documentEpoch).toBe(initial.pageTranslationNavigation.nextDocumentEpoch + 1);
+    expect(await tracker.capture(42, 7, 'https://frame.example/b')).toEqual({ ...child, routeRevision: 1, url: 'https://frame.example/b' });
+    const returned = await tracker.capture(42, 7, frames[1].url);
+    expect(returned).toEqual({ ...child, routeRevision: 2 });
+    const restarted = new PageNavigationTracker(storage);
+    expect(await restarted.getCursor(42, 7)).toEqual(returned);
+  });
+
   it('does not register arbitrary untracked history or committed frames', async () => {
     expect(await tracker.capture(42, 1234, 'https://frame.example/a')).toBeNull();
     await tracker.committed(42, 1234, 'https://frame.example/b');

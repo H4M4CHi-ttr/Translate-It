@@ -54,6 +54,12 @@ export class PageNavigationTracker {
 
   seed(tabId, frames) {
     return this._run(state => {
+      if (!Array.isArray(frames)) throw new Error('Invalid Page frame');
+      for (const frame of frames) {
+        if (!Number.isInteger(frame?.frameId) || frame.frameId < 0 || typeof frame.url !== 'string' || !frame.url) {
+          throw new Error('Invalid Page frame');
+        }
+      }
       const live = new Set(frames.map(frame => `${tabId}:${frame.frameId}`));
       for (const key of Object.keys(state.frames)) {
         if (key.startsWith(`${tabId}:`) && !live.has(key)) {
@@ -62,9 +68,6 @@ export class PageNavigationTracker {
         }
       }
       for (const frame of frames) {
-        if (!Number.isInteger(frame.frameId) || frame.frameId < 0 || typeof frame.url !== 'string' || !frame.url) {
-          throw new Error('Invalid Page frame');
-        }
         const key = `${tabId}:${frame.frameId}`;
         // Frame discovery can return a snapshot older than an already captured route.
         if (!state.frames[key]) state.frames[key] = this._newDocument(state, frame.url);

@@ -34,7 +34,6 @@ export class PageTranslationEventManager {
 
   _init() {
     this.initialize();
-    this._setupStorageListeners();
     this._setupPageEventBusListeners();
   }
 
@@ -51,6 +50,7 @@ export class PageTranslationEventManager {
       });
     };
     this.manager.addEventListener(browser.runtime.onMessage, 'message', this.navigationListener);
+    this._setupStorageListeners();
   }
 
   destroy() {
@@ -61,7 +61,7 @@ export class PageTranslationEventManager {
 
   _setupStorageListeners() {
     // Stop obsolete work without reverting translations already committed.
-    storageManager.on('change:TRANSLATION_API', ({ newValue, oldValue }) => {
+    this.manager.addEventListener(storageManager, 'change:TRANSLATION_API', ({ newValue, oldValue }) => {
       const pending = this.manager.pendingSettingsAttempt;
       if (newValue !== oldValue
           && (pending ? !pending.explicitProvider : (
@@ -73,7 +73,7 @@ export class PageTranslationEventManager {
       }
     });
 
-    storageManager.on('change:MODE_PROVIDERS', ({ newValue, oldValue }) => {
+    this.manager.addEventListener(storageManager, 'change:MODE_PROVIDERS', ({ newValue, oldValue }) => {
       const newPageProvider = newValue?.[TranslationMode.Page];
       const oldPageProvider = oldValue?.[TranslationMode.Page];
 
@@ -84,7 +84,7 @@ export class PageTranslationEventManager {
       }
     });
 
-    storageManager.on('change', ({ key, newValue, oldValue }) => {
+    this.manager.addEventListener(storageManager, 'change', ({ key, newValue, oldValue }) => {
       if (newValue === oldValue) return;
       const providerId = this.manager.pendingSettingsAttempt?.explicitProvider || this.manager.settings?.translationApi;
       const provider = findProviderById(providerId);
@@ -110,7 +110,7 @@ export class PageTranslationEventManager {
     });
 
     // Listen for scroll stop delay changes
-    storageManager.on('change:WHOLE_PAGE_SCROLL_STOP_DELAY', ({ newValue }) => {
+    this.manager.addEventListener(storageManager, 'change:WHOLE_PAGE_SCROLL_STOP_DELAY', ({ newValue }) => {
       this.logger.debug('WHOLE_PAGE_SCROLL_STOP_DELAY changed in storage:', newValue);
       if (this.manager.settings) {
         this.manager.settings.scrollStopDelay = Number(newValue) || 500;
@@ -123,7 +123,7 @@ export class PageTranslationEventManager {
     });
 
     // Listen for mode changes (Fluid vs On Stop)
-    storageManager.on('change:WHOLE_PAGE_TRANSLATE_AFTER_SCROLL_STOP', ({ newValue }) => {
+    this.manager.addEventListener(storageManager, 'change:WHOLE_PAGE_TRANSLATE_AFTER_SCROLL_STOP', ({ newValue }) => {
       this.logger.info('WHOLE_PAGE_TRANSLATE_AFTER_SCROLL_STOP changed in storage:', newValue);
       if (this.manager.settings) {
         this.manager.settings.translateAfterScrollStop = !!newValue;

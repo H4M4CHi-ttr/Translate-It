@@ -420,7 +420,10 @@ describe('PageTranslationBridge stale settlement integration', () => {
     browser.runtime.id = 'test-extension';
     const manager = {
       logger: bridge.logger,
-      addEventListener: vi.fn((target, _event, handler) => target.addListener(handler)),
+      addEventListener: vi.fn((target, event, handler) => {
+        if (typeof target.on === 'function') target.on(event, handler);
+        else target.addListener(handler);
+      }),
       removeEventListener: vi.fn((target, _event, handler) => target.removeListener(handler)),
       stopAutoTranslation: vi.fn(async () => bridge.stopPersistence()),
       resetError: vi.fn(),

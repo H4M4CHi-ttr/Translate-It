@@ -572,6 +572,7 @@ export class PageTranslationManager extends ResourceTracker {
 
       // Stop the scheduler from processing more batches
       this.scheduler.setTranslationState(false, undefined, undefined, cancellationReason);
+      this._cleanupSession(stoppingSessionId);
 
       const resultData = {
         url: this.currentUrl,
@@ -775,10 +776,9 @@ export class PageTranslationManager extends ResourceTracker {
     }, sessionId);
   }
 
-  _cleanupSession() {
-    if (this.translationMessageId) {
-      const sessionId = this.translationMessageId;
-      this.translationMessageId = null;
+  _cleanupSession(sessionId = this.translationMessageId) {
+    if (sessionId) {
+      if (this.translationMessageId === sessionId) this.translationMessageId = null;
       sendRegularMessage({
         action: MessageActions.CANCEL_SESSION,
         data: { sessionId }
